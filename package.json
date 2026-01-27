@@ -1,0 +1,48 @@
+{
+  "name": "orca-cli",
+  "version": "0.1.0",
+  "description": "Menu-driven orchestrator for coordinating development workflows with AI droids",
+  "module": "src/index.tsx",
+  "type": "module",
+  "bin": {
+    "orca": "./dist/cli.js"
+  },
+  "scripts": {
+    "dev": "bun run src/cli.tsx",
+    "build": "bun build src/cli.tsx --outdir dist --target node",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src",
+    "prepublishOnly": "bun run build"
+  },
+  "files": [
+    "dist",
+    "templates"
+  ],
+  "keywords": [
+    "cli",
+    "orchestrator",
+    "ai",
+    "droid",
+    "workflow",
+    "automation"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/react": "^19.2.10"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "commander": "^14.0.2",
+    "ink": "^6.6.0",
+    "ink-select-input": "^6.2.0",
+    "ink-spinner": "^5.0.0",
+    "ink-table": "^3.1.0",
+    "ink-text-input": "^6.0.0",
+    "react": "^19.2.4",
+    "yaml": "^2.8.2"
+  }
+}
