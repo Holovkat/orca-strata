@@ -38,16 +38,26 @@ export function MultiLineInput({
   const [filteredEntries, setFilteredEntries] = useState<FileEntry[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [currentDir, setCurrentDir] = useState("");
+  const [filePickerLoading, setFilePickerLoading] = useState(false);
+  const [filePickerError, setFilePickerError] = useState("");
 
   // Load files when file picker is shown
   useEffect(() => {
     if (!showFilePicker || !projectPath) return;
     
+    let cancelled = false;
+    
     const loadFiles = async () => {
+      setFilePickerLoading(true);
+      setFilePickerError("");
+      
       try {
         const { readdir, stat } = await import("fs/promises");
         const targetDir = currentDir ? join(projectPath, currentDir) : projectPath;
         const entries = await readdir(targetDir);
+        
+        if (cancelled) return;
+        
         const fileList: FileEntry[] = [];
         
         // Add parent directory option if not at root
@@ -59,16 +69,26 @@ export function MultiLineInput({
           });
         }
         
+        // Limit entries to prevent freezing on large directories
+        const maxEntries = 100;
+        let count = 0;
+        
         for (const entry of entries) {
+          if (count >= maxEntries) break;
           if (entry.startsWith(".") && entry !== "..") continue; // Skip hidden files
+          
           const fullPath = join(targetDir, entry);
           const stats = await stat(fullPath).catch(() => null);
+          
+          if (cancelled) return;
+          
           if (stats) {
             fileList.push({
               name: entry,
               path: currentDir ? join(currentDir, entry) : entry,
               type: stats.isDirectory() ? "folder" : "file",
             });
+            count++;
           }
         }
         
@@ -80,16 +100,25 @@ export function MultiLineInput({
           return a.name.localeCompare(b.name);
         });
         
-        setFileEntries(fileList);
-        setFilteredEntries(fileList);
-        setSelectedIndex(0);
-      } catch {
-        setFileEntries([]);
-        setFilteredEntries([]);
+        if (!cancelled) {
+          setFileEntries(fileList);
+          setFilteredEntries(fileList);
+          setSelectedIndex(0);
+          setFilePickerLoading(false);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setFileEntries([]);
+          setFilteredEntries([]);
+          setFilePickerError(err instanceof Error ? err.message : "Failed to load files");
+          setFilePickerLoading(false);
+        }
       }
     };
     
     loadFiles();
+    
+    return () => { cancelled = true; };
   }, [showFilePicker, projectPath, currentDir]);
 
   // Filter entries based on search query
@@ -302,11 +331,15 @@ export function MultiLineInput({
             <Text color="gray"> - {currentDir || "/"}</Text>
           </Box>
           <Box marginBottom={1}>
-            <Text color="cyan">Search: </Text>
+            <Text color="cyan">Filter: </Text>
             <Text>{fileSearchQuery}</Text>
             <Text backgroundColor="white" color="black"> </Text>
           </Box>
-          {visibleEntries.length === 0 ? (
+          {filePickerLoading ? (
+            <Text color="yellow">Loading...</Text>
+          ) : filePickerError ? (
+            <Text color="red">{filePickerError}</Text>
+          ) : visibleEntries.length === 0 ? (
             <Text color="gray" dimColor>No files found</Text>
           ) : (
             visibleEntries.map((entry, i) => {
