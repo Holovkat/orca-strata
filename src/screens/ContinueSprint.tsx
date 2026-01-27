@@ -3,6 +3,7 @@ import { Box, Text, useInput } from "ink";
 import { Menu, type MenuItem } from "../components/Menu.js";
 import { Spinner } from "../components/Spinner.js";
 import { StatusMessage } from "../components/StatusMessage.js";
+import { Markdown } from "../components/Markdown.js";
 import { invokeDroid, assignDroidByShardType } from "../lib/droid.js";
 import {
   createWorktreeWithNewBranch,
@@ -255,7 +256,7 @@ export function ContinueSprint({
           {droidOutput && (
             <Box marginTop={1} flexDirection="column">
               <Text color="yellow">--- Droid Output ---</Text>
-              <Text color="white" wrap="wrap">{droidOutput.slice(-1000)}</Text>
+              <Markdown maxLines={30}>{droidOutput.slice(-2000)}</Markdown>
             </Box>
           )}
         </Box>

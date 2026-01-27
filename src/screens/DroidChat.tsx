@@ -3,6 +3,7 @@ import { Box, Text, useInput, useStdout } from "ink";
 import TextInput from "ink-text-input";
 import { Spinner } from "../components/Spinner.js";
 import { StatusMessage } from "../components/StatusMessage.js";
+import { Markdown } from "../components/Markdown.js";
 import { invokeDroid } from "../lib/droid.js";
 import type { OrcaConfig, Shard } from "../lib/types.js";
 
@@ -147,7 +148,7 @@ export function DroidChat({
     }
   });
 
-  // If a message is expanded, show it full screen
+  // If a message is expanded, show it full screen with markdown
   if (expandedMessage !== null && messages[expandedMessage]) {
     const msg = messages[expandedMessage];
     return (
@@ -155,9 +156,13 @@ export function DroidChat({
         <Text bold color="cyan">Full Message ({msg.role})</Text>
         <Text color="gray" dimColor>Press Esc to go back, or number key to view another message</Text>
         <Box marginTop={1} flexDirection="column">
-          <Text color={msg.role === "user" ? "blue" : msg.role === "assistant" ? "green" : "gray"} wrap="wrap">
-            {msg.content}
-          </Text>
+          {msg.role === "assistant" ? (
+            <Markdown>{msg.content}</Markdown>
+          ) : (
+            <Text color={msg.role === "user" ? "blue" : "gray"} wrap="wrap">
+              {msg.content}
+            </Text>
+          )}
         </Box>
       </Box>
     );
@@ -196,8 +201,10 @@ export function DroidChat({
         {/* Current streaming response */}
         {currentResponse && (
           <Box marginY={1} flexDirection="column">
-            <Text color="green">◆ </Text>
-            <Text color="green" wrap="wrap">{currentResponse}</Text>
+            <Text color="green">◆ Droid:</Text>
+            <Box marginLeft={2}>
+              <Markdown maxLines={20}>{currentResponse}</Markdown>
+            </Box>
           </Box>
         )}
 
@@ -235,41 +242,54 @@ interface MessageBubbleProps {
 }
 
 function MessageBubble({ message, index, maxLines }: MessageBubbleProps) {
-  const roleColors: Record<string, string> = {
-    user: "blue",
-    assistant: "green",
-    system: "gray",
-  };
-
   const roleIcons: Record<string, string> = {
     user: "◇",
     assistant: "◆",
     system: "●",
   };
 
-  const color = roleColors[message.role] || "white";
   const icon = roleIcons[message.role] || "•";
+  const linesToShow = Math.min(maxLines, 15);
 
-  // Show more lines - up to maxLines or 20
+  // For assistant messages, use markdown rendering
+  if (message.role === "assistant") {
+    const lines = message.content.split("\n");
+    const hasMore = lines.length > linesToShow;
+    
+    return (
+      <Box marginY={0} flexDirection="column">
+        <Text color="green">
+          {icon} [{index}] Droid
+        </Text>
+        <Box marginLeft={2} flexDirection="column">
+          <Markdown maxLines={linesToShow}>{message.content}</Markdown>
+          {hasMore && (
+            <Text color="yellow">{`... (${lines.length - linesToShow} more lines - press ${index} to expand)`}</Text>
+          )}
+        </Box>
+      </Box>
+    );
+  }
+
+  // For user/system messages, simple text
+  const color = message.role === "user" ? "blue" : "gray";
+  const label = message.role === "user" ? "You" : "System";
   const lines = message.content.split("\n");
-  const linesToShow = Math.min(maxLines, 20);
   const displayLines = lines.slice(0, linesToShow);
   const hasMore = lines.length > linesToShow;
 
   return (
     <Box marginY={0} flexDirection="column">
-      <Box flexDirection="column">
-        <Text color={color as any}>
-          {icon} [{index}] {message.role === "user" ? "You" : message.role === "assistant" ? "Droid" : "System"}
+      <Text color={color}>
+        {icon} [{index}] {label}
+      </Text>
+      <Box marginLeft={2}>
+        <Text color={color} wrap="wrap">
+          {displayLines.join("\n")}
+          {hasMore && (
+            <Text color="yellow">{`\n... (${lines.length - linesToShow} more lines - press ${index} to expand)`}</Text>
+          )}
         </Text>
-        <Box marginLeft={2}>
-          <Text color={color as any} wrap="wrap">
-            {displayLines.join("\n")}
-            {hasMore && (
-              <Text color="yellow">{`\n... (${lines.length - linesToShow} more lines - press ${index} to expand)`}</Text>
-            )}
-          </Text>
-        </Box>
       </Box>
     </Box>
   );
