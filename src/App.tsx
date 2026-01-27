@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { Box, Text } from "ink";
+import { Box } from "ink";
 import { MainMenu } from "./screens/MainMenu.js";
 import { NewSprint } from "./screens/NewSprint.js";
 import { ContinueSprint } from "./screens/ContinueSprint.js";
@@ -8,7 +8,7 @@ import { ManualActions } from "./screens/ManualActions.js";
 import { Settings } from "./screens/Settings.js";
 import { Header } from "./components/Header.js";
 import { Spinner } from "./components/Spinner.js";
-import { loadState, saveState, scanForSprints } from "./lib/state.js";
+import { deriveSprintStatus, refreshStatus } from "./lib/state.js";
 import type { OrcaConfig, Screen, SprintStatus } from "./lib/types.js";
 
 interface AppProps {
@@ -21,70 +21,45 @@ export function App({ config, projectPath }: AppProps) {
   const [sprintStatus, setSprintStatus] = useState<SprintStatus | null>(null);
   const [currentConfig, setCurrentConfig] = useState(config);
   const [loading, setLoading] = useState(true);
-  const [availableSprints, setAvailableSprints] = useState<string[]>([]);
 
-  // Load state on startup
+  // Derive state from sources of truth on startup
   useEffect(() => {
     async function init() {
-      // Try to load persisted state
-      const savedState = await loadState(projectPath);
-      
-      if (savedState) {
-        setSprintStatus(savedState);
-      } else {
-        // Scan for existing sprints in features folder
-        const sprints = await scanForSprints(projectPath, currentConfig.paths.features);
-        if (sprints.length > 0) {
-          setAvailableSprints(sprints.map(s => s.name));
-          // Auto-load the first sprint found
-          const firstSprint = sprints[0]!;
-          const counts = {
-            total: firstSprint.shards.length,
-            readyToBuild: firstSprint.shards.filter(s => s.status === "Ready to Build").length,
-            inProgress: firstSprint.shards.filter(s => s.status === "In Progress").length,
-            readyForReview: firstSprint.shards.filter(s => s.status === "Ready for Review").length,
-            inReview: firstSprint.shards.filter(s => s.status === "In Review").length,
-            readyForUat: firstSprint.shards.filter(s => s.status === "Ready for UAT").length,
-            uatInProgress: firstSprint.shards.filter(s => s.status === "UAT in Progress").length,
-            userAcceptance: firstSprint.shards.filter(s => s.status === "User Acceptance").length,
-            done: firstSprint.shards.filter(s => s.status === "Done").length,
-          };
-          setSprintStatus({
-            sprint: firstSprint,
-            counts,
-            activeDroids: [],
-          });
-        }
-      }
-      
+      const status = await deriveSprintStatus(projectPath, currentConfig);
+      setSprintStatus(status);
       setLoading(false);
     }
-    
+
     init();
-  }, [projectPath, currentConfig.paths.features]);
+  }, [projectPath, currentConfig]);
 
-  // Save state when sprint status changes
-  const handleSprintStatusChange = useCallback(
-    async (status: SprintStatus | null) => {
-      setSprintStatus(status);
-      await saveState(projectPath, status);
-    },
-    [projectPath]
-  );
+  // Handle sprint status changes (runtime only - active droids, etc.)
+  const handleSprintStatusChange = useCallback((status: SprintStatus | null) => {
+    setSprintStatus(status);
+    // Note: We don't persist this - status is derived from GitHub/checklists
+    // Runtime changes (like active droids) are ephemeral
+  }, []);
 
-  const handleSprintCreated = useCallback(
-    async (status: SprintStatus) => {
-      setSprintStatus(status);
-      await saveState(projectPath, status);
-      setScreen("continue-sprint");
-    },
-    [projectPath]
-  );
+  // Handle new sprint creation
+  const handleSprintCreated = useCallback((status: SprintStatus) => {
+    setSprintStatus(status);
+    setScreen("continue-sprint");
+  }, []);
+
+  // Refresh status from sources of truth
+  const handleRefresh = useCallback(async () => {
+    if (sprintStatus) {
+      setLoading(true);
+      const refreshed = await refreshStatus(projectPath, currentConfig, sprintStatus);
+      setSprintStatus(refreshed);
+      setLoading(false);
+    }
+  }, [projectPath, currentConfig, sprintStatus]);
 
   if (loading) {
     return (
       <Box flexDirection="column" padding={1}>
-        <Spinner message="Loading project state..." />
+        <Spinner message="Loading project state from GitHub/checklists..." />
       </Box>
     );
   }
