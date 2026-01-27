@@ -1,5 +1,6 @@
-import React, { useState, useCallback } from "react";
-import { Box, Text, useInput } from "ink";
+import React, { useState, useEffect } from "react";
+import { Box, Text, useInput, useStdout } from "ink";
+import { join, relative } from "path";
 
 interface MultiLineInputProps {
   value: string;
@@ -8,6 +9,13 @@ interface MultiLineInputProps {
   onCancel?: () => void;
   placeholder?: string;
   minHeight?: number;
+  projectPath?: string; // For @ file references
+}
+
+interface FileEntry {
+  name: string;
+  path: string;
+  type: "file" | "folder";
 }
 
 export function MultiLineInput({
@@ -17,10 +25,161 @@ export function MultiLineInput({
   onCancel,
   placeholder = "Type here...",
   minHeight = 3,
+  projectPath,
 }: MultiLineInputProps) {
   const [cursorPos, setCursorPos] = useState(value.length);
+  const { stdout } = useStdout();
+  const terminalWidth = stdout?.columns || 80;
+  
+  // @ mention state
+  const [showFilePicker, setShowFilePicker] = useState(false);
+  const [fileSearchQuery, setFileSearchQuery] = useState("");
+  const [fileEntries, setFileEntries] = useState<FileEntry[]>([]);
+  const [filteredEntries, setFilteredEntries] = useState<FileEntry[]>([]);
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [currentDir, setCurrentDir] = useState("");
+
+  // Load files when file picker is shown
+  useEffect(() => {
+    if (!showFilePicker || !projectPath) return;
+    
+    const loadFiles = async () => {
+      try {
+        const { readdir, stat } = await import("fs/promises");
+        const targetDir = currentDir ? join(projectPath, currentDir) : projectPath;
+        const entries = await readdir(targetDir);
+        const fileList: FileEntry[] = [];
+        
+        // Add parent directory option if not at root
+        if (currentDir) {
+          fileList.push({
+            name: "..",
+            path: join(currentDir, ".."),
+            type: "folder",
+          });
+        }
+        
+        for (const entry of entries) {
+          if (entry.startsWith(".") && entry !== "..") continue; // Skip hidden files
+          const fullPath = join(targetDir, entry);
+          const stats = await stat(fullPath).catch(() => null);
+          if (stats) {
+            fileList.push({
+              name: entry,
+              path: currentDir ? join(currentDir, entry) : entry,
+              type: stats.isDirectory() ? "folder" : "file",
+            });
+          }
+        }
+        
+        // Sort: folders first, then files
+        fileList.sort((a, b) => {
+          if (a.name === "..") return -1;
+          if (b.name === "..") return 1;
+          if (a.type !== b.type) return a.type === "folder" ? -1 : 1;
+          return a.name.localeCompare(b.name);
+        });
+        
+        setFileEntries(fileList);
+        setFilteredEntries(fileList);
+        setSelectedIndex(0);
+      } catch {
+        setFileEntries([]);
+        setFilteredEntries([]);
+      }
+    };
+    
+    loadFiles();
+  }, [showFilePicker, projectPath, currentDir]);
+
+  // Filter entries based on search query
+  useEffect(() => {
+    if (!fileSearchQuery) {
+      setFilteredEntries(fileEntries);
+    } else {
+      const query = fileSearchQuery.toLowerCase();
+      setFilteredEntries(
+        fileEntries.filter(e => e.name.toLowerCase().includes(query))
+      );
+    }
+    setSelectedIndex(0);
+  }, [fileSearchQuery, fileEntries]);
 
   useInput((input, key) => {
+    // File picker mode
+    if (showFilePicker) {
+      if (key.escape) {
+        setShowFilePicker(false);
+        setFileSearchQuery("");
+        setCurrentDir("");
+        return;
+      }
+      
+      if (key.upArrow) {
+        setSelectedIndex(Math.max(0, selectedIndex - 1));
+        return;
+      }
+      
+      if (key.downArrow) {
+        setSelectedIndex(Math.min(filteredEntries.length - 1, selectedIndex + 1));
+        return;
+      }
+      
+      if (key.return) {
+        const selected = filteredEntries[selectedIndex];
+        if (selected) {
+          if (selected.type === "folder") {
+            // Navigate into folder
+            if (selected.name === "..") {
+              const parts = currentDir.split("/").filter(Boolean);
+              parts.pop();
+              setCurrentDir(parts.join("/"));
+            } else {
+              setCurrentDir(selected.path);
+            }
+            setFileSearchQuery("");
+          } else {
+            // Insert file reference
+            const reference = `@file:${selected.path}`;
+            const newValue = value.slice(0, cursorPos) + reference + value.slice(cursorPos);
+            onChange(newValue);
+            setCursorPos(cursorPos + reference.length);
+            setShowFilePicker(false);
+            setFileSearchQuery("");
+            setCurrentDir("");
+          }
+        }
+        return;
+      }
+      
+      if (key.backspace) {
+        setFileSearchQuery(prev => prev.slice(0, -1));
+        return;
+      }
+      
+      // Tab to insert folder reference
+      if (key.tab) {
+        const selected = filteredEntries[selectedIndex];
+        if (selected && selected.type === "folder" && selected.name !== "..") {
+          const reference = `@folder:${selected.path}/`;
+          const newValue = value.slice(0, cursorPos) + reference + value.slice(cursorPos);
+          onChange(newValue);
+          setCursorPos(cursorPos + reference.length);
+          setShowFilePicker(false);
+          setFileSearchQuery("");
+          setCurrentDir("");
+        }
+        return;
+      }
+      
+      // Type to filter
+      if (input && !key.ctrl && !key.meta) {
+        setFileSearchQuery(prev => prev + input);
+      }
+      return;
+    }
+
+    // Normal input mode
     if (key.escape) {
       onCancel?.();
       return;
@@ -39,6 +198,14 @@ export function MultiLineInput({
       const newValue = value.slice(0, cursorPos) + "\n" + value.slice(cursorPos);
       onChange(newValue);
       setCursorPos(cursorPos + 1);
+      return;
+    }
+
+    // @ triggers file picker
+    if (input === "@" && projectPath) {
+      setShowFilePicker(true);
+      setFileSearchQuery("");
+      setCurrentDir("");
       return;
     }
 
@@ -116,14 +283,68 @@ export function MultiLineInput({
     charCount += lineLength + 1; // +1 for newline
   }
 
+  // File picker overlay
+  if (showFilePicker) {
+    const maxVisible = 10;
+    const startIdx = Math.max(0, selectedIndex - Math.floor(maxVisible / 2));
+    const visibleEntries = filteredEntries.slice(startIdx, startIdx + maxVisible);
+
+    return (
+      <Box flexDirection="column" width={terminalWidth - 4}>
+        <Box 
+          borderStyle="single" 
+          borderColor="yellow" 
+          flexDirection="column"
+          paddingX={1}
+        >
+          <Box marginBottom={1}>
+            <Text bold color="yellow">@ File Reference</Text>
+            <Text color="gray"> - {currentDir || "/"}</Text>
+          </Box>
+          <Box marginBottom={1}>
+            <Text color="cyan">Search: </Text>
+            <Text>{fileSearchQuery}</Text>
+            <Text backgroundColor="white" color="black"> </Text>
+          </Box>
+          {visibleEntries.length === 0 ? (
+            <Text color="gray" dimColor>No files found</Text>
+          ) : (
+            visibleEntries.map((entry, i) => {
+              const actualIdx = startIdx + i;
+              const isSelected = actualIdx === selectedIndex;
+              const icon = entry.type === "folder" ? "📁" : "📄";
+              return (
+                <Text key={entry.path}>
+                  <Text color={isSelected ? "cyan" : "white"}>
+                    {isSelected ? "❯ " : "  "}
+                  </Text>
+                  <Text>{icon} </Text>
+                  <Text color={isSelected ? "cyan" : entry.type === "folder" ? "blue" : "white"}>
+                    {entry.name}
+                  </Text>
+                </Text>
+              );
+            })
+          )}
+        </Box>
+        <Box marginTop={0}>
+          <Text color="gray" dimColor>
+            ↑↓ navigate • Enter select/open • Tab folder ref • Esc cancel
+          </Text>
+        </Box>
+      </Box>
+    );
+  }
+
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" width={terminalWidth - 4}>
       <Box 
         borderStyle="single" 
         borderColor="cyan" 
         flexDirection="column"
         paddingX={1}
         minHeight={minHeight + 2}
+        width="100%"
       >
         {lines.length === 0 || (lines.length === 1 && lines[0] === "") ? (
           <Text color="gray" dimColor>{placeholder}</Text>
@@ -151,7 +372,7 @@ export function MultiLineInput({
       </Box>
       <Box marginTop={0}>
         <Text color="gray" dimColor>
-          Enter submit • Ctrl+J newline • Esc cancel
+          Enter submit • Ctrl+J newline • @ reference file • Esc cancel
         </Text>
       </Box>
     </Box>

@@ -47,6 +47,7 @@ const QUESTIONS: Array<{ key: keyof PrdAnswers; question: string; hint: string }
 
 interface PrdQAProps {
   projectName: string;
+  projectPath?: string; // For @ file references
   initialAnswers?: Partial<PrdAnswers>;
   onComplete: (answers: PrdAnswers) => void;
   onCancel: () => void;
@@ -54,7 +55,7 @@ interface PrdQAProps {
 
 type Mode = "asking" | "review";
 
-export function PrdQA({ projectName, initialAnswers, onComplete, onCancel }: PrdQAProps) {
+export function PrdQA({ projectName, projectPath, initialAnswers, onComplete, onCancel }: PrdQAProps) {
   const [mode, setMode] = useState<Mode>("asking");
   const [currentQuestion, setCurrentQuestion] = useState(0);
   const [answers, setAnswers] = useState<PrdAnswers>({
@@ -109,6 +110,7 @@ export function PrdQA({ projectName, initialAnswers, onComplete, onCancel }: Prd
                 setCurrentInput("");
               }}
               minHeight={5}
+              projectPath={projectPath}
             />
           </Box>
         </Box>
@@ -200,8 +202,9 @@ export function PrdQA({ projectName, initialAnswers, onComplete, onCancel }: Prd
             onChange={setCurrentInput}
             onSubmit={handleAnswerSubmit}
             onCancel={onCancel}
-            placeholder="Type your answer..."
+            placeholder="Type your answer... (@ to reference files)"
             minHeight={4}
+            projectPath={projectPath}
           />
         </Box>
       </Box>
