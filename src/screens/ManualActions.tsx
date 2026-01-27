@@ -1,9 +1,21 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { Box, Text, useInput } from "ink";
 import { Menu, type MenuItem } from "../components/Menu.js";
 import { QuestionPrompt } from "../components/QuestionPrompt.js";
 import { Spinner } from "../components/Spinner.js";
 import { StatusMessage } from "../components/StatusMessage.js";
+import { invokeDroid, listAvailableDroids } from "../lib/droid.js";
+import {
+  listWorktrees,
+  createWorktreeWithNewBranch,
+  removeWorktree,
+  pruneWorktrees,
+  getCurrentBranch,
+  listBranches,
+  createStackedBranch,
+  rebaseStack,
+  push,
+} from "../lib/git.js";
 import type { OrcaConfig } from "../lib/types.js";
 
 interface ManualActionsProps {
@@ -15,31 +27,36 @@ interface ManualActionsProps {
 type SubScreen =
   | "menu"
   | "invoke-droid"
-  | "move-issue"
-  | "create-issue"
   | "run-checks"
   | "manage-worktrees"
   | "git-operations";
 
-export function ManualActions({
-  config,
-  projectPath,
-  onBack,
-}: ManualActionsProps) {
+export function ManualActions({ config, projectPath, onBack }: ManualActionsProps) {
   const [subScreen, setSubScreen] = useState<SubScreen>("menu");
   const [loading, setLoading] = useState(false);
+  const [loadingMessage, setLoadingMessage] = useState("");
   const [message, setMessage] = useState<{
     type: "success" | "error" | "info";
     text: string;
   } | null>(null);
+  const [droidOutput, setDroidOutput] = useState("");
+
+  const appendDroidOutput = useCallback((chunk: string) => {
+    setDroidOutput((prev) => prev + chunk);
+  }, []);
+
+  const clearDroidOutput = useCallback(() => {
+    setDroidOutput("");
+  }, []);
 
   useInput((input, key) => {
-    if (key.escape) {
+    if (key.escape && !loading) {
       if (subScreen === "menu") {
         onBack();
       } else {
         setSubScreen("menu");
         setMessage(null);
+        clearDroidOutput();
       }
     }
   });
@@ -49,16 +66,6 @@ export function ManualActions({
       label: "Invoke Droid",
       value: "invoke-droid",
       hint: "Run a droid with custom prompt",
-    },
-    {
-      label: "Move Issue",
-      value: "move-issue",
-      hint: "Move issue to different column",
-    },
-    {
-      label: "Create Issue",
-      value: "create-issue",
-      hint: "Create a new GitHub issue",
     },
     {
       label: "Run Checks",
@@ -87,7 +94,11 @@ export function ManualActions({
         return (
           <InvokeDroidScreen
             config={config}
-            onMessage={setMessage}
+            projectPath={projectPath}
+            setLoading={setLoading}
+            setLoadingMessage={setLoadingMessage}
+            setMessage={setMessage}
+            appendDroidOutput={appendDroidOutput}
             onBack={() => setSubScreen("menu")}
           />
         );
@@ -95,7 +106,19 @@ export function ManualActions({
         return (
           <RunChecksScreen
             projectPath={projectPath}
-            onMessage={setMessage}
+            setLoading={setLoading}
+            setLoadingMessage={setLoadingMessage}
+            setMessage={setMessage}
+            onBack={() => setSubScreen("menu")}
+          />
+        );
+      case "manage-worktrees":
+        return (
+          <WorktreesScreen
+            projectPath={projectPath}
+            setLoading={setLoading}
+            setLoadingMessage={setLoadingMessage}
+            setMessage={setMessage}
             onBack={() => setSubScreen("menu")}
           />
         );
@@ -103,7 +126,9 @@ export function ManualActions({
         return (
           <GitOperationsScreen
             projectPath={projectPath}
-            onMessage={setMessage}
+            setLoading={setLoading}
+            setLoadingMessage={setLoadingMessage}
+            setMessage={setMessage}
             onBack={() => setSubScreen("menu")}
           />
         );
@@ -131,52 +156,95 @@ export function ManualActions({
           <StatusMessage type={message.type} message={message.text} />
         </Box>
       )}
-      {loading ? <Spinner message="Processing..." /> : renderSubScreen()}
-      <Box marginTop={1}>
-        <Text color="gray">Esc to go back</Text>
-      </Box>
+      {loading ? (
+        <Box flexDirection="column">
+          <Spinner message={loadingMessage} />
+          {droidOutput && (
+            <Box marginTop={1}>
+              <Text color="gray">{droidOutput.slice(-500)}</Text>
+            </Box>
+          )}
+        </Box>
+      ) : (
+        renderSubScreen()
+      )}
+      {!loading && (
+        <Box marginTop={1}>
+          <Text color="gray">Esc to go back</Text>
+        </Box>
+      )}
     </Box>
   );
 }
 
 interface SubScreenProps {
-  onMessage: (msg: { type: "success" | "error" | "info"; text: string }) => void;
+  projectPath: string;
+  setLoading: (loading: boolean) => void;
+  setLoadingMessage: (msg: string) => void;
+  setMessage: (msg: { type: "success" | "error" | "info"; text: string } | null) => void;
   onBack: () => void;
 }
 
 function InvokeDroidScreen({
   config,
-  onMessage,
+  projectPath,
+  setLoading,
+  setLoadingMessage,
+  setMessage,
+  appendDroidOutput,
   onBack,
-}: SubScreenProps & { config: OrcaConfig }) {
-  const [step, setStep] = useState<"select-droid" | "enter-prompt" | "running">(
-    "select-droid"
-  );
+}: SubScreenProps & { config: OrcaConfig; appendDroidOutput: (chunk: string) => void }) {
+  const [step, setStep] = useState<"select-droid" | "enter-prompt">("select-droid");
   const [selectedDroid, setSelectedDroid] = useState<string>("");
-  const [prompt, setPrompt] = useState<string>("");
+  const [availableDroids, setAvailableDroids] = useState<string[]>([]);
 
-  const droids = [
-    "senior-backend-engineer",
-    "frontend-developer",
-    "fullstack-developer",
-    "implementation-reviewer",
-    "code-reviewer",
-    "uat-runner",
-    "qa-engineer",
-    "technical-analyst",
-    "troubleshooting-analyst",
-    "documentation-specialist",
-    "git-operator",
-  ];
+  useEffect(() => {
+    listAvailableDroids().then(setAvailableDroids);
+  }, []);
+
+  const runDroid = async (prompt: string) => {
+    setLoading(true);
+    setLoadingMessage(`Running ${selectedDroid}...`);
+
+    try {
+      const result = await invokeDroid(
+        {
+          droid: selectedDroid,
+          prompt,
+          autoLevel: config.droids.auto_level,
+          cwd: projectPath,
+        },
+        config,
+        (chunk) => appendDroidOutput(chunk)
+      );
+
+      setMessage({
+        type: result.success ? "success" : "error",
+        text: result.success ? `${selectedDroid} completed` : `${selectedDroid} failed`,
+      });
+    } catch (err) {
+      setMessage({
+        type: "error",
+        text: err instanceof Error ? err.message : "Droid invocation failed",
+      });
+    }
+
+    setLoading(false);
+    onBack();
+  };
 
   if (step === "select-droid") {
+    if (availableDroids.length === 0) {
+      return <Spinner message="Loading available droids..." />;
+    }
+
     return (
       <Box flexDirection="column">
         <Text bold>Select Droid</Text>
         <QuestionPrompt
           question="Which droid do you want to invoke?"
           type="select"
-          options={droids}
+          options={availableDroids}
           onAnswer={(answer) => {
             setSelectedDroid(answer);
             setStep("enter-prompt");
@@ -187,36 +255,57 @@ function InvokeDroidScreen({
     );
   }
 
-  if (step === "enter-prompt") {
-    return (
-      <Box flexDirection="column">
-        <Text bold>Invoke: {selectedDroid}</Text>
-        <QuestionPrompt
-          question="Enter your prompt for the droid:"
-          type="text"
-          onAnswer={(answer) => {
-            setPrompt(answer);
-            setStep("running");
-            // TODO: Actually invoke the droid
-            setTimeout(() => {
-              onMessage({ type: "success", text: `Droid ${selectedDroid} invoked` });
-              onBack();
-            }, 2000);
-          }}
-          onCancel={onBack}
-        />
-      </Box>
-    );
-  }
-
-  return <Spinner message={`Running ${selectedDroid}...`} />;
+  return (
+    <Box flexDirection="column">
+      <Text bold>Invoke: {selectedDroid}</Text>
+      <QuestionPrompt
+        question="Enter your prompt for the droid:"
+        type="text"
+        onAnswer={runDroid}
+        onCancel={onBack}
+      />
+    </Box>
+  );
 }
 
 function RunChecksScreen({
   projectPath,
-  onMessage,
+  setLoading,
+  setLoadingMessage,
+  setMessage,
   onBack,
-}: SubScreenProps & { projectPath: string }) {
+}: SubScreenProps) {
+  const { spawn } = require("child_process");
+
+  const runCommand = async (name: string, cmd: string, args: string[]) => {
+    setLoading(true);
+    setLoadingMessage(`Running ${name}...`);
+
+    return new Promise<void>((resolve) => {
+      const proc = spawn(cmd, args, {
+        cwd: projectPath,
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+
+      let output = "";
+      proc.stdout.on("data", (data: Buffer) => {
+        output += data.toString();
+      });
+      proc.stderr.on("data", (data: Buffer) => {
+        output += data.toString();
+      });
+
+      proc.on("close", (code: number) => {
+        setLoading(false);
+        setMessage({
+          type: code === 0 ? "success" : "error",
+          text: code === 0 ? `${name} passed` : `${name} failed`,
+        });
+        resolve();
+      });
+    });
+  };
+
   const menuItems: MenuItem[] = [
     { label: "Run Lint", value: "lint" },
     { label: "Run Typecheck", value: "typecheck" },
@@ -230,12 +319,87 @@ function RunChecksScreen({
       <Text bold>Run Checks</Text>
       <Menu
         items={menuItems}
-        onSelect={(value) => {
+        onSelect={async (value) => {
           if (value === "back") {
             onBack();
-          } else {
-            // TODO: Actually run the checks
-            onMessage({ type: "info", text: `Running ${value}...` });
+          } else if (value === "lint") {
+            await runCommand("Lint", "bun", ["run", "lint"]);
+          } else if (value === "typecheck") {
+            await runCommand("Typecheck", "bun", ["run", "typecheck"]);
+          } else if (value === "build") {
+            await runCommand("Build", "bun", ["run", "build"]);
+          } else if (value === "all") {
+            await runCommand("Lint", "bun", ["run", "lint"]);
+            await runCommand("Typecheck", "bun", ["run", "typecheck"]);
+            await runCommand("Build", "bun", ["run", "build"]);
+          }
+        }}
+      />
+    </Box>
+  );
+}
+
+function WorktreesScreen({
+  projectPath,
+  setLoading,
+  setLoadingMessage,
+  setMessage,
+  onBack,
+}: SubScreenProps) {
+  const [worktrees, setWorktrees] = useState<Array<{ path: string; branch: string; head: string }>>([]);
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  useEffect(() => {
+    listWorktrees(projectPath).then(setWorktrees);
+  }, [projectPath, refreshKey]);
+
+  const refresh = () => setRefreshKey((k) => k + 1);
+
+  const menuItems: MenuItem[] = [
+    { label: "Refresh List", value: "refresh" },
+    { label: "Prune Stale Worktrees", value: "prune" },
+    ...worktrees.slice(1).map((wt) => ({
+      label: `Remove: ${wt.branch}`,
+      value: `remove-${wt.path}`,
+      hint: wt.path,
+    })),
+    { label: "Back", value: "back" },
+  ];
+
+  return (
+    <Box flexDirection="column">
+      <Text bold>Manage Worktrees</Text>
+      <Box marginY={1} flexDirection="column">
+        <Text color="gray">Current worktrees:</Text>
+        {worktrees.map((wt, i) => (
+          <Text key={wt.path} color={i === 0 ? "cyan" : "white"}>
+            {i === 0 ? "● " : "  "}
+            {wt.branch} → {wt.path}
+          </Text>
+        ))}
+      </Box>
+      <Menu
+        items={menuItems}
+        onSelect={async (value) => {
+          if (value === "back") {
+            onBack();
+          } else if (value === "refresh") {
+            refresh();
+          } else if (value === "prune") {
+            setLoading(true);
+            setLoadingMessage("Pruning worktrees...");
+            await pruneWorktrees(projectPath);
+            setLoading(false);
+            setMessage({ type: "success", text: "Pruned stale worktrees" });
+            refresh();
+          } else if (value.startsWith("remove-")) {
+            const path = value.replace("remove-", "");
+            setLoading(true);
+            setLoadingMessage(`Removing worktree ${path}...`);
+            await removeWorktree(path, true, projectPath);
+            setLoading(false);
+            setMessage({ type: "success", text: "Worktree removed" });
+            refresh();
           }
         }}
       />
@@ -245,28 +409,70 @@ function RunChecksScreen({
 
 function GitOperationsScreen({
   projectPath,
-  onMessage,
+  setLoading,
+  setLoadingMessage,
+  setMessage,
   onBack,
-}: SubScreenProps & { projectPath: string }) {
+}: SubScreenProps) {
+  const [branches, setBranches] = useState<string[]>([]);
+  const [currentBranch, setCurrentBranch] = useState<string>("");
+
+  useEffect(() => {
+    listBranches(projectPath).then(setBranches);
+    getCurrentBranch(projectPath).then((b) => setCurrentBranch(b || ""));
+  }, [projectPath]);
+
   const menuItems: MenuItem[] = [
     { label: "Create Stacked Branch", value: "create-branch" },
     { label: "Rebase Stack", value: "rebase" },
     { label: "Push Current Branch", value: "push" },
-    { label: "View Stack", value: "view-stack" },
+    { label: "Push with Force-Lease", value: "push-force" },
     { label: "Back", value: "back" },
   ];
 
   return (
     <Box flexDirection="column">
       <Text bold>Git Operations</Text>
+      <Box marginY={1}>
+        <Text>Current branch: </Text>
+        <Text color="cyan">{currentBranch}</Text>
+      </Box>
       <Menu
         items={menuItems}
-        onSelect={(value) => {
+        onSelect={async (value) => {
           if (value === "back") {
             onBack();
-          } else {
-            // TODO: Actually run git operations
-            onMessage({ type: "info", text: `Running ${value}...` });
+          } else if (value === "create-branch") {
+            // TODO: Prompt for branch name
+            setMessage({ type: "info", text: "Use NewSprint to create branches" });
+          } else if (value === "rebase") {
+            setLoading(true);
+            setLoadingMessage("Rebasing stack onto main...");
+            const result = await rebaseStack("main", projectPath);
+            setLoading(false);
+            if (result.success) {
+              setMessage({ type: "success", text: "Stack rebased successfully" });
+            } else {
+              setMessage({ type: "error", text: `Rebase failed on: ${result.failedBranch}` });
+            }
+          } else if (value === "push") {
+            setLoading(true);
+            setLoadingMessage("Pushing...");
+            const success = await push("origin", currentBranch, false, projectPath);
+            setLoading(false);
+            setMessage({
+              type: success ? "success" : "error",
+              text: success ? "Pushed successfully" : "Push failed",
+            });
+          } else if (value === "push-force") {
+            setLoading(true);
+            setLoadingMessage("Pushing with force-lease...");
+            const success = await push("origin", currentBranch, true, projectPath);
+            setLoading(false);
+            setMessage({
+              type: success ? "success" : "error",
+              text: success ? "Pushed successfully" : "Push failed",
+            });
           }
         }}
       />
