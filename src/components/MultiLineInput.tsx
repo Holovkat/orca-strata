@@ -423,6 +423,38 @@ export function MultiLineInput({
       return;
     }
 
+    // Home key - start of line (Ctrl+Home = start of editor)
+    if (input === "\x1b[H" || input === "\x1b[1~" || (key.ctrl && input === "a")) {
+      if (key.ctrl || key.meta) {
+        // Ctrl+Home or Ctrl+A = start of editor
+        setCursorPos(0);
+      } else {
+        // Home = start of current line
+        const beforeCursor = value.slice(0, cursorPos);
+        const lineStart = beforeCursor.lastIndexOf("\n") + 1;
+        setCursorPos(lineStart);
+      }
+      return;
+    }
+
+    // End key - end of line (Ctrl+End = end of editor)
+    if (input === "\x1b[F" || input === "\x1b[4~" || (key.ctrl && input === "e")) {
+      if (key.ctrl || key.meta) {
+        // Ctrl+End or Ctrl+E = end of editor
+        setCursorPos(value.length);
+      } else {
+        // End = end of current line
+        const afterCursor = value.slice(cursorPos);
+        const nextNewline = afterCursor.indexOf("\n");
+        if (nextNewline === -1) {
+          setCursorPos(value.length);
+        } else {
+          setCursorPos(cursorPos + nextNewline);
+        }
+      }
+      return;
+    }
+
     // Regular character input
     if (input && !key.ctrl && !key.meta) {
       const newValue = value.slice(0, cursorPos) + input + value.slice(cursorPos);
