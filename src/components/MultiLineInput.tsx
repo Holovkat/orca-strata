@@ -207,6 +207,7 @@ export function MultiLineInput({
     // File picker mode
     if (showFilePicker) {
       if (key.escape) {
+        // First Esc closes file picker, returns to editing
         setShowFilePicker(false);
         setFileSearchQuery("");
         return;
@@ -225,14 +226,20 @@ export function MultiLineInput({
       if (key.return) {
         const selected = filteredEntries[selectedIndex];
         if (selected) {
-          // Insert reference
-          const prefix = selected.type === "folder" ? "@folder:" : "@file:";
-          const reference = `${prefix}${selected.path}`;
-          const newValue = value.slice(0, cursorPos) + reference + value.slice(cursorPos);
-          onChange(newValue);
-          setCursorPos(cursorPos + reference.length);
-          setShowFilePicker(false);
-          setFileSearchQuery("");
+          if (selected.type === "folder" && !key.ctrl) {
+            // Enter on folder = drill down (same as Tab)
+            const newQuery = selected.path.endsWith("/") ? selected.path : selected.path + "/";
+            setFileSearchQuery(newQuery);
+          } else {
+            // Enter on file (or Ctrl+Enter on folder) = insert reference
+            const prefix = selected.type === "folder" ? "@folder:" : "@file:";
+            const reference = `${prefix}${selected.path}`;
+            const newValue = value.slice(0, cursorPos) + reference + value.slice(cursorPos);
+            onChange(newValue);
+            setCursorPos(cursorPos + reference.length);
+            setShowFilePicker(false);
+            setFileSearchQuery("");
+          }
         }
         return;
       }
@@ -414,7 +421,7 @@ export function MultiLineInput({
         </Box>
         <Box marginTop={0}>
           <Text color="gray" dimColor>
-            ↑↓ navigate • Tab autocomplete • Enter select • Esc cancel
+            ↑↓ nav • Tab/Enter expand • Enter select file • Ctrl+Enter select folder • Esc back
           </Text>
         </Box>
       </Box>
