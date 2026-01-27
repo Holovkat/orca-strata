@@ -75,55 +75,71 @@ export function MultiLineInput({
         
         const ignoreDirs = new Set(["node_modules", ".git", "dist", "build", ".next", "coverage", "__pycache__", ".venv", "venv"]);
         
-        // For absolute paths, list the directory contents
+        // For absolute paths, do recursive search from base directory
         if (isAbsolutePath) {
           const basePath = resolvePath(fileSearchQuery);
           
-          // Check if it's a directory or partial path
-          const stats = await stat(basePath).catch(() => null);
+          // Find the deepest existing directory and the search pattern
+          let searchDir = basePath;
+          let searchPattern = "";
           
-          if (stats?.isDirectory()) {
-            // List directory contents
-            const entries = await readdir(basePath);
-            for (const entry of entries.slice(0, 50)) {
-              if (entry.startsWith(".")) continue;
-              const fullPath = join(basePath, entry);
-              const entryStats = await stat(fullPath).catch(() => null);
-              if (entryStats) {
-                fileList.push({
-                  name: entry,
-                  path: join(fileSearchQuery, entry),
-                  type: entryStats.isDirectory() ? "folder" : "file",
-                });
-              }
+          while (searchDir && searchDir !== "/") {
+            const dirStats = await stat(searchDir).catch(() => null);
+            if (dirStats?.isDirectory()) {
+              break;
             }
-          } else {
-            // Partial path - list parent directory and filter
-            const parentDir = basePath.substring(0, basePath.lastIndexOf("/")) || "/";
-            const partial = basePath.substring(basePath.lastIndexOf("/") + 1).toLowerCase();
-            
-            const entries = await readdir(parentDir).catch(() => [] as string[]);
-            for (const entry of entries) {
-              if (entry.startsWith(".")) continue;
-              if (partial && !entry.toLowerCase().startsWith(partial)) continue;
-              
-              const fullPath = join(parentDir, entry);
-              const entryStats = await stat(fullPath).catch(() => null);
-              if (entryStats) {
-                const queryParent = fileSearchQuery.substring(0, fileSearchQuery.lastIndexOf("/") + 1);
-                fileList.push({
-                  name: entry,
-                  path: queryParent + entry,
-                  type: entryStats.isDirectory() ? "folder" : "file",
-                });
-              }
-            }
+            // Extract the last component as search pattern
+            const lastSlash = searchDir.lastIndexOf("/");
+            searchPattern = searchDir.substring(lastSlash + 1) + (searchPattern ? "/" + searchPattern : "");
+            searchDir = searchDir.substring(0, lastSlash) || "/";
           }
           
-          fileList.sort((a, b) => {
-            if (a.type !== b.type) return a.type === "folder" ? -1 : 1;
-            return a.name.localeCompare(b.name);
-          });
+          // Get the base path for display (the part user typed up to searchDir)
+          const displayBase = fileSearchQuery.substring(0, fileSearchQuery.length - searchPattern.length);
+          
+          // Recursive scan with pattern matching
+          const scanAbsolute = async (dir: string, relPath: string) => {
+            if (cancelled || fileList.length >= maxEntries) return;
+            
+            try {
+              const entries = await readdir(dir);
+              
+              for (const entry of entries) {
+                if (cancelled || fileList.length >= maxEntries) break;
+                if (entry.startsWith(".")) continue;
+                if (ignoreDirs.has(entry)) continue;
+                
+                const fullPath = join(dir, entry);
+                const entryRelPath = relPath ? `${relPath}/${entry}` : entry;
+                const entryStats = await stat(fullPath).catch(() => null);
+                
+                if (entryStats) {
+                  const matchesPattern = !searchPattern || 
+                    entry.toLowerCase().includes(searchPattern.toLowerCase()) ||
+                    entryRelPath.toLowerCase().includes(searchPattern.toLowerCase());
+                  
+                  if (matchesPattern) {
+                    fileList.push({
+                      name: entry,
+                      path: displayBase + entryRelPath,
+                      type: entryStats.isDirectory() ? "folder" : "file",
+                    });
+                  }
+                  
+                  // Recurse into directories
+                  if (entryStats.isDirectory()) {
+                    await scanAbsolute(fullPath, entryRelPath);
+                  }
+                }
+              }
+            } catch {
+              // Ignore permission errors
+            }
+          };
+          
+          await scanAbsolute(searchDir, "");
+          
+          fileList.sort((a, b) => a.path.localeCompare(b.path));
           
           if (!cancelled) {
             setFilteredEntries(fileList.slice(0, 20));
