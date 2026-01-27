@@ -242,6 +242,19 @@ export function MultiLineInput({
         return;
       }
       
+      // Tab to autocomplete selected item into search field
+      if (key.tab) {
+        const selected = filteredEntries[selectedIndex];
+        if (selected) {
+          // For folders, add trailing slash to continue browsing
+          const newQuery = selected.type === "folder" 
+            ? (selected.path.endsWith("/") ? selected.path : selected.path + "/")
+            : selected.path;
+          setFileSearchQuery(newQuery);
+        }
+        return;
+      }
+      
       // Type to filter
       if (input && !key.ctrl && !key.meta) {
         setFileSearchQuery(prev => prev + input);
@@ -401,7 +414,7 @@ export function MultiLineInput({
         </Box>
         <Box marginTop={0}>
           <Text color="gray" dimColor>
-            ↑↓ navigate • Enter select • Esc cancel
+            ↑↓ navigate • Tab autocomplete • Enter select • Esc cancel
           </Text>
         </Box>
       </Box>
