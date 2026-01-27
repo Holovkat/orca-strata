@@ -11,6 +11,7 @@ import {
   push,
   rebaseStack,
   getCurrentBranch,
+  setGitDebugCallback,
 } from "../lib/git.js";
 import { closeIssue, updateIssueBody, addIssueLabel, removeIssueLabel } from "../lib/github.js";
 import { buildDependencyGraph, getShardsReadyToRun } from "../lib/dependencies.js";
@@ -334,10 +335,17 @@ function BuildPhase({
       const branchName = `${sprintStatus.sprint.branch}-${shard.id}`;
 
       setLoadingMessage(`Creating worktree for ${shard.id}...`);
+      
+      // Enable git debug output
+      setGitDebugCallback((msg) => appendDroidOutput?.(msg));
+      
       const worktreeResult = await createWorktreeWithNewBranch(worktreePath, branchName, projectPath);
+      
+      // Disable git debug after worktree creation
+      setGitDebugCallback(null);
+      
       if (!worktreeResult.success) {
-        // Worktree might already exist, try to continue anyway
-        appendDroidOutput?.(`[Worktree warning: ${worktreeResult.error}]\n`);
+        appendDroidOutput?.(`[Worktree error: ${worktreeResult.error}]\n`);
       }
 
       // Update shard status
@@ -528,12 +536,155 @@ function ReviewPhase({
   appendDroidOutput,
 }: PhaseProps) {
   const readyForReview = sprintStatus.sprint.shards.filter((s) => s.status === "Ready for Review");
+  const [mergeResults, setMergeResults] = React.useState<Map<string, { merged: boolean; buildPassed: boolean; error?: string }>>(new Map());
 
-  const runReview = async (shard: Shard, reviewType: "implementation" | "code") => {
+  // Sort shards by ID to merge in order (shard-00, shard-01, etc.)
+  const sortedShards = [...readyForReview].sort((a, b) => a.id.localeCompare(b.id));
+
+  const runBuildVerification = async () => {
+    setLoading(true);
+    appendDroidOutput?.("\n=== Starting Build Verification ===\n");
+    
+    const reviewPath = join(projectPath, config.paths.worktrees, "review");
+    const results = new Map<string, { merged: boolean; buildPassed: boolean; error?: string }>();
+    
+    // Enable git debug
+    setGitDebugCallback((msg) => appendDroidOutput?.(msg));
+    
+    // Create review worktree from sprint branch
+    setLoadingMessage("Creating review worktree...");
+    appendDroidOutput?.(`\n[review] Creating worktree from ${sprintStatus.sprint.branch}\n`);
+    
+    const { createReviewWorktree, cherryPickBranch } = await import("../lib/git.js");
+    const wtResult = await createReviewWorktree(sprintStatus.sprint.branch, reviewPath, projectPath);
+    
+    if (!wtResult.success) {
+      setGitDebugCallback(null);
+      setMessage({ type: "error", text: `Failed to create review worktree: ${wtResult.error}` });
+      setLoading(false);
+      return;
+    }
+    
+    appendDroidOutput?.(`[review] Review worktree created at ${reviewPath}\n\n`);
+    
+    // Merge each shard branch sequentially
+    for (const shard of sortedShards) {
+      const shardBranch = shard.branch || `${sprintStatus.sprint.branch}-${shard.id}`;
+      setLoadingMessage(`Merging ${shard.title}...`);
+      appendDroidOutput?.(`\n[review] === Merging ${shard.id}: ${shard.title} ===\n`);
+      appendDroidOutput?.(`[review] Branch: ${shardBranch}\n`);
+      
+      // Cherry-pick commits from shard branch
+      const mergeResult = await cherryPickBranch(shardBranch, reviewPath);
+      
+      if (!mergeResult.success) {
+        appendDroidOutput?.(`[review] FAILED: ${mergeResult.error}\n`);
+        results.set(shard.id, { merged: false, buildPassed: false, error: mergeResult.error });
+        // Stop here - can't continue if merge fails
+        break;
+      }
+      
+      appendDroidOutput?.(`[review] Merge successful\n`);
+      
+      // Run build verification
+      setLoadingMessage(`Verifying build after ${shard.title}...`);
+      appendDroidOutput?.(`[review] Running build verification...\n`);
+      
+      const { spawn } = await import("child_process");
+      
+      // Check for package.json to determine build commands
+      const { existsSync } = await import("fs");
+      const hasPackageJson = existsSync(join(reviewPath, "package.json"));
+      
+      if (hasPackageJson) {
+        // Run typecheck and build
+        const buildCommands = [
+          { cmd: "bun", args: ["install"], name: "install" },
+          { cmd: "bun", args: ["run", "typecheck"], name: "typecheck" },
+          { cmd: "bun", args: ["run", "build"], name: "build" },
+        ];
+        
+        let buildPassed = true;
+        let buildError: string | undefined;
+        
+        for (const { cmd, args, name } of buildCommands) {
+          appendDroidOutput?.(`[review] Running ${name}...\n`);
+          
+          const result = await new Promise<{ success: boolean; output: string }>((resolve) => {
+            const proc = spawn(cmd, args, { cwd: reviewPath, stdio: ["pipe", "pipe", "pipe"] });
+            let output = "";
+            proc.stdout.on("data", (d) => { output += d.toString(); });
+            proc.stderr.on("data", (d) => { output += d.toString(); });
+            proc.on("close", (code) => resolve({ success: code === 0, output }));
+            proc.on("error", (e) => resolve({ success: false, output: e.message }));
+          });
+          
+          if (!result.success) {
+            appendDroidOutput?.(`[review] ${name} FAILED:\n${result.output.slice(-500)}\n`);
+            buildPassed = false;
+            buildError = `${name} failed`;
+            break;
+          }
+          appendDroidOutput?.(`[review] ${name} passed\n`);
+        }
+        
+        results.set(shard.id, { merged: true, buildPassed, error: buildError });
+        
+        if (!buildPassed) {
+          appendDroidOutput?.(`[review] Build verification FAILED for ${shard.id}\n`);
+          // Don't stop - continue to show which shards pass/fail
+        } else {
+          appendDroidOutput?.(`[review] Build verification PASSED for ${shard.id}\n`);
+        }
+      } else {
+        // No package.json - assume build passes
+        appendDroidOutput?.(`[review] No package.json found - skipping build verification\n`);
+        results.set(shard.id, { merged: true, buildPassed: true });
+      }
+    }
+    
+    setGitDebugCallback(null);
+    setMergeResults(results);
+    
+    // Update shard statuses based on results
+    const updatedShards = sprintStatus.sprint.shards.map((s) => {
+      const result = results.get(s.id);
+      if (result?.merged && result?.buildPassed) {
+        return { ...s, status: "In Review" as ColumnName };
+      } else if (result && !result.buildPassed) {
+        // Send back to build phase
+        return { ...s, status: "In Progress" as ColumnName };
+      }
+      return s;
+    });
+    
+    onStatusChange({
+      ...sprintStatus,
+      sprint: { ...sprintStatus.sprint, shards: updatedShards },
+      counts: calculateCounts(updatedShards),
+    });
+    
+    const passedCount = Array.from(results.values()).filter(r => r.merged && r.buildPassed).length;
+    const failedCount = Array.from(results.values()).filter(r => !r.buildPassed).length;
+    
+    appendDroidOutput?.(`\n=== Build Verification Complete ===\n`);
+    appendDroidOutput?.(`Passed: ${passedCount} | Failed: ${failedCount}\n`);
+    
+    if (failedCount > 0) {
+      setMessage({ type: "error", text: `${failedCount} shard(s) failed build verification` });
+    } else {
+      setMessage({ type: "success", text: `All ${passedCount} shards passed build verification` });
+    }
+    
+    setLoading(false);
+  };
+
+  const runDroidReview = async (shard: Shard, reviewType: "implementation" | "code") => {
     setLoading(true);
     setLoadingMessage(`Running ${reviewType} review on ${shard.title}...`);
 
     const droidName = reviewType === "implementation" ? "implementation-reviewer" : "code-reviewer";
+    const reviewPath = join(projectPath, config.paths.worktrees, "review");
 
     const prompt =
       reviewType === "implementation"
@@ -560,7 +711,7 @@ Return: APPROVED or CHANGES_REQUESTED with details.`;
         droid: droidName,
         prompt,
         autoLevel: "low",
-        cwd: projectPath,
+        cwd: reviewPath, // Run in review worktree
       },
       config,
       (chunk) => appendDroidOutput?.(chunk)
@@ -581,23 +732,32 @@ Return: APPROVED or CHANGES_REQUESTED with details.`;
       });
       setMessage({ type: "success", text: `${shard.title} passed ${reviewType} review` });
     } else {
-      setMessage({ type: "warning" as any, text: `${shard.title} needs changes` });
+      setMessage({ type: "error", text: `${shard.title} needs changes` });
     }
 
     setLoading(false);
   };
 
+  const inReview = sprintStatus.sprint.shards.filter((s) => s.status === "In Review");
+
   const menuItems: MenuItem[] = [
+    {
+      label: "Run Build Verification",
+      value: "build-verify",
+      hint: `Merge & verify ${readyForReview.length} shards`,
+      disabled: readyForReview.length === 0,
+    },
     {
       label: "Run Implementation Review",
       value: "impl-review",
-      hint: `${readyForReview.length} ready`,
-      disabled: readyForReview.length === 0,
+      hint: `${inReview.length} in review`,
+      disabled: inReview.length === 0,
     },
     {
       label: "Run Code Review",
       value: "code-review",
-      disabled: readyForReview.length === 0,
+      hint: `${inReview.length} in review`,
+      disabled: inReview.length === 0,
     },
     {
       label: "Back",
@@ -610,18 +770,31 @@ Return: APPROVED or CHANGES_REQUESTED with details.`;
       <Text bold color="yellow">
         Review Phase
       </Text>
-      <Box marginY={1}>
+      <Box marginY={1} flexDirection="column">
         <Text>Ready for Review: {readyForReview.length}</Text>
+        <Text>In Review: {inReview.length}</Text>
+        {mergeResults.size > 0 && (
+          <Box marginTop={1} flexDirection="column">
+            <Text bold>Merge Results:</Text>
+            {Array.from(mergeResults.entries()).map(([id, result]) => (
+              <Text key={id} color={result.buildPassed ? "green" : "red"}>
+                {result.buildPassed ? "✓" : "✗"} {id}: {result.error || "OK"}
+              </Text>
+            ))}
+          </Box>
+        )}
       </Box>
       <Menu
         items={menuItems}
         onSelect={async (value) => {
           if (value === "back") {
             onBack();
-          } else if (value === "impl-review" && readyForReview[0]) {
-            await runReview(readyForReview[0], "implementation");
-          } else if (value === "code-review" && readyForReview[0]) {
-            await runReview(readyForReview[0], "code");
+          } else if (value === "build-verify") {
+            await runBuildVerification();
+          } else if (value === "impl-review" && inReview[0]) {
+            await runDroidReview(inReview[0], "implementation");
+          } else if (value === "code-review" && inReview[0]) {
+            await runDroidReview(inReview[0], "code");
           }
         }}
       />

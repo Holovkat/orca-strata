@@ -2,11 +2,21 @@ import { spawn } from "child_process";
 import { join } from "path";
 import { mkdir, rm } from "fs/promises";
 
+// Debug output callback - set this to enable debug logging
+let debugCallback: ((msg: string) => void) | null = null;
+
+export function setGitDebugCallback(cb: ((msg: string) => void) | null) {
+  debugCallback = cb;
+}
+
 async function runGit(
   args: string[],
   cwd?: string
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolve) => {
+    const cmdStr = `git ${args.join(" ")}`;
+    debugCallback?.(`[git] $ ${cmdStr}${cwd ? ` (in ${cwd})` : ""}\n`);
+    
     const proc = spawn("git", args, {
       cwd: cwd || process.cwd(),
       stdio: ["pipe", "pipe", "pipe"],
@@ -24,10 +34,19 @@ async function runGit(
     });
 
     proc.on("close", (code) => {
-      resolve({ stdout: stdout.trim(), stderr: stderr.trim(), code: code || 0 });
+      const result = { stdout: stdout.trim(), stderr: stderr.trim(), code: code || 0 };
+      if (result.code !== 0) {
+        debugCallback?.(`[git] exit ${result.code}: ${result.stderr || result.stdout}\n`);
+      } else if (result.stdout) {
+        debugCallback?.(`[git] ok: ${result.stdout.slice(0, 100)}${result.stdout.length > 100 ? "..." : ""}\n`);
+      } else {
+        debugCallback?.(`[git] ok\n`);
+      }
+      resolve(result);
     });
 
     proc.on("error", (err) => {
+      debugCallback?.(`[git] error: ${err.message}\n`);
       resolve({ stdout: "", stderr: err.message, code: 1 });
     });
   });
@@ -120,7 +139,19 @@ export async function createWorktreeWithNewBranch(
     // Ignore if exists
   }
 
-  const result = await runGit(["worktree", "add", "-b", branch, path], cwd);
+  // Clean up any existing worktree directory (ephemeral), but keep the branch (has commits)
+  await runGit(["worktree", "remove", "--force", path], cwd);
+  await rm(path, { recursive: true, force: true }).catch(() => {});
+  await runGit(["worktree", "prune"], cwd);
+  
+  // Check if branch already exists
+  const branchExists = await runGit(["rev-parse", "--verify", branch], cwd);
+  
+  // Use existing branch or create new one
+  const result = branchExists.code === 0
+    ? await runGit(["worktree", "add", path, branch], cwd)
+    : await runGit(["worktree", "add", "-b", branch, path], cwd);
+  
   if (result.code !== 0) {
     return { success: false, error: result.stderr || "Failed to create worktree" };
   }
@@ -326,4 +357,117 @@ export async function rebaseStack(
   }
 
   return { success: true };
+}
+
+// Review merge operations - merge shard branches sequentially
+
+export async function cherryPickBranch(
+  branch: string,
+  cwd?: string
+): Promise<{ success: boolean; error?: string }> {
+  // Get the commits that are unique to this branch (not in current HEAD)
+  const currentHead = await runGit(["rev-parse", "HEAD"], cwd);
+  const branchHead = await runGit(["rev-parse", branch], cwd);
+  
+  if (currentHead.stdout === branchHead.stdout) {
+    // Branch has no new commits
+    return { success: true };
+  }
+  
+  // Find merge base and cherry-pick commits
+  const mergeBase = await runGit(["merge-base", "HEAD", branch], cwd);
+  if (mergeBase.code !== 0) {
+    return { success: false, error: "Could not find merge base" };
+  }
+  
+  // Get list of commits to cherry-pick
+  const commits = await runGit(
+    ["rev-list", "--reverse", `${mergeBase.stdout}..${branch}`],
+    cwd
+  );
+  
+  if (!commits.stdout.trim()) {
+    return { success: true }; // No commits to cherry-pick
+  }
+  
+  // Cherry-pick each commit
+  for (const commit of commits.stdout.trim().split("\n")) {
+    const result = await runGit(["cherry-pick", commit], cwd);
+    if (result.code !== 0) {
+      // Abort and return error
+      await runGit(["cherry-pick", "--abort"], cwd);
+      return { success: false, error: `Cherry-pick failed: ${result.stderr}` };
+    }
+  }
+  
+  return { success: true };
+}
+
+export async function mergeBranch(
+  branch: string,
+  noFf = true,
+  cwd?: string
+): Promise<{ success: boolean; error?: string }> {
+  const args = ["merge", branch];
+  if (noFf) {
+    args.push("--no-ff");
+  }
+  args.push("-m", `Merge ${branch}`);
+  
+  const result = await runGit(args, cwd);
+  if (result.code !== 0) {
+    // Check for conflicts
+    if (result.stderr.includes("CONFLICT") || result.stderr.includes("conflict")) {
+      await runGit(["merge", "--abort"], cwd);
+      return { success: false, error: `Merge conflict: ${result.stderr}` };
+    }
+    return { success: false, error: result.stderr || "Merge failed" };
+  }
+  
+  return { success: true };
+}
+
+export async function createReviewWorktree(
+  sprintBranch: string,
+  reviewPath: string,
+  cwd?: string
+): Promise<{ success: boolean; error?: string }> {
+  const reviewBranch = `${sprintBranch}-review`;
+  
+  // Clean up any existing review worktree
+  await runGit(["worktree", "remove", "--force", reviewPath], cwd);
+  await rm(reviewPath, { recursive: true, force: true }).catch(() => {});
+  await runGit(["worktree", "prune"], cwd);
+  
+  // Delete review branch if exists
+  await runGit(["branch", "-D", reviewBranch], cwd);
+  
+  // Create new review branch from sprint branch
+  const result = await runGit(
+    ["worktree", "add", "-b", reviewBranch, reviewPath, sprintBranch],
+    cwd
+  );
+  
+  if (result.code !== 0) {
+    return { success: false, error: result.stderr || "Failed to create review worktree" };
+  }
+  
+  return { success: true };
+}
+
+export async function getCommitsBetween(
+  baseBranch: string,
+  targetBranch: string,
+  cwd?: string
+): Promise<string[]> {
+  const result = await runGit(
+    ["log", "--oneline", `${baseBranch}..${targetBranch}`],
+    cwd
+  );
+  
+  if (result.code !== 0 || !result.stdout.trim()) {
+    return [];
+  }
+  
+  return result.stdout.trim().split("\n");
 }

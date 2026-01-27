@@ -70,20 +70,29 @@ export function invokeDroid(
       "text",
     ];
 
+    // Use --cwd flag to set working directory instead of spawn cwd
+    // This way droid runs in the right directory but spawn can find the binary
     if (invocation.cwd) {
       args.push("--cwd", invocation.cwd);
     }
 
-    // Log what we're doing
-    onOutput?.(`[Starting droid: ${invocation.droid}]\n`);
-    onOutput?.(`[Model: ${invocation.model || config.droids.model}]\n`);
-    onOutput?.(`[Auto level: ${invocation.autoLevel || config.droids.auto_level}]\n`);
-    onOutput?.(`[Working dir: ${invocation.cwd || process.cwd()}]\n\n`);
+    // Log the full command being executed
+    const cmdStr = `droid ${args.join(" ")}`;
+    onOutput?.(`[droid] $ ${cmdStr}\n`);
+    onOutput?.(`[droid] droid: ${invocation.droid}\n`);
+    onOutput?.(`[droid] model: ${invocation.model || config.droids.model}\n`);
+    onOutput?.(`[droid] auto: ${invocation.autoLevel || config.droids.auto_level}\n`);
+    onOutput?.(`[droid] cwd: ${invocation.cwd || process.cwd()}\n`);
+    onOutput?.(`[droid] prompt length: ${fullPrompt.length} chars\n\n`);
 
-    const proc = spawn("droid", args, {
-      cwd: invocation.cwd || process.cwd(),
+    // Use full path to droid binary - shell: true causes stdin buffering issues with large prompts
+    const droidBin = join(process.env.HOME || "~", ".local", "bin", "droid");
+    const proc = spawn(droidBin, args, {
       stdio: ["pipe", "pipe", "pipe"],
+      env: process.env,
     });
+    
+    onOutput?.(`[droid] spawned pid: ${proc.pid}\n`);
 
     let output = "";
     let timedOut = false;
@@ -122,6 +131,8 @@ export function invokeDroid(
       if (timeoutId) {
         clearTimeout(timeoutId);
       }
+      onOutput?.(`\n[droid] exit code: ${code}${timedOut ? " (timed out)" : ""}\n`);
+      onOutput?.(`[droid] output length: ${output.length} chars\n`);
       resolve({
         success: code === 0 && !timedOut,
         output,
@@ -134,7 +145,7 @@ export function invokeDroid(
       if (timeoutId) {
         clearTimeout(timeoutId);
       }
-      onOutput?.(`\n[ERROR: ${err.message}]\n`);
+      onOutput?.(`\n[droid] ERROR: ${err.message}\n`);
       resolve({
         success: false,
         output: output + "\n" + err.message,
