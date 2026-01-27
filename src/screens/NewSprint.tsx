@@ -26,15 +26,18 @@ type Step =
   | "select-project"
   | "create-project"
   | "prd-qa"
+  | "sprint-type"        // New: choose initial/bug/feature/enhancement
   | "name"
   | "description"
-  | "gather-requirements"
+  | "gather-requirements" // Only for bug/feature/enhancement
   | "analyze-patterns"
   | "review-shards"
   | "create-board"
   | "create-issues"
   | "create-branch"
   | "complete";
+
+type SprintType = "initial" | "feature" | "enhancement" | "bugfix";
 
 interface ShardDraft {
   id: string;
@@ -53,6 +56,7 @@ interface ShardDraft {
 interface SprintData {
   name: string;
   description: string;
+  sprintType: SprintType;
   requirements: string[];
   shardDrafts: ShardDraft[];
   boardNumber?: number;
@@ -71,6 +75,7 @@ export function NewSprint({
   const [sprintData, setSprintData] = useState<SprintData>({
     name: "",
     description: "",
+    sprintType: "initial",
     requirements: [],
     shardDrafts: [],
     issueNumbers: new Map(),
@@ -154,6 +159,112 @@ export function NewSprint({
     [sprintData.requirements]
   );
 
+  // Analyze PRD directly for initial implementation sprint
+  const runAnalyzePrd = async () => {
+    setLoading(true);
+    setLoadingMessage("Analyzing PRD and generating implementation plan...");
+    setError(null);
+
+    try {
+      // Read the PRD file
+      const { readFile } = await import("fs/promises");
+      const prdPath = join(selectedProjectPath, "features", "prd.md");
+      const prdContent = await readFile(prdPath, "utf-8");
+
+      const prompt = `You are analyzing a Product Requirements Document (PRD) to create an implementation plan.
+
+## PRD Content
+${prdContent}
+
+## Your Task
+Create a comprehensive implementation plan broken into atomic shards.
+
+1. FIRST create "shard-00-architecture" - this MUST be the first shard and sets up:
+   - Project structure and folder organization  
+   - Tech stack and dependencies
+   - Shared interfaces/types based on PRD domain
+   - Design documents outlining architecture decisions
+   - Any scaffolding needed before implementation
+   
+2. Then create implementation shards based on PRD features:
+   - Break each core feature into 1-3 atomic shards
+   - Prioritize MVP features first
+   - Each shard should be completable in a single droid session
+   - ALL shards MUST depend on shard-00-architecture
+
+## Output Format
+Return a JSON array of shard objects:
+\`\`\`json
+[
+  {
+    "id": "shard-00-architecture",
+    "title": "Project Architecture and Setup",
+    "context": "Establishes project foundation based on PRD requirements",
+    "task": "Set up project structure, tech stack, interfaces, and design docs",
+    "type": "docs",
+    "requiredReading": [{"label": "PRD", "path": "../../features/prd.md"}],
+    "newInShard": ["Project structure", "Tech stack setup", "Domain interfaces", "Architecture docs"],
+    "acceptanceCriteria": ["Project compiles", "All domain types defined", "Design docs complete"],
+    "creates": ["docs/design/architecture.md", "src/types/index.ts"],
+    "dependsOn": [],
+    "modifies": ["package.json"]
+  },
+  {
+    "id": "shard-01-feature-name",
+    "title": "Implement Feature X",
+    "context": "From PRD: [relevant section]",
+    "task": "Specific implementation task",
+    "type": "backend|frontend|fullstack",
+    "requiredReading": [{"label": "Architecture", "path": "../../docs/design/architecture.md"}],
+    "newInShard": ["Component A", "Service B"],
+    "acceptanceCriteria": ["Feature works", "Tests pass"],
+    "creates": ["src/components/X.tsx"],
+    "dependsOn": ["shard-00-architecture"],
+    "modifies": []
+  }
+]
+\`\`\`
+
+Return ONLY the JSON array, no other text.`;
+
+      const result = await invokeDroid(
+        {
+          droid: "technical-analyst",
+          prompt,
+          autoLevel: "low",
+          cwd: selectedProjectPath,
+        },
+        config,
+        (chunk) => setDroidOutput((prev) => prev + chunk)
+      );
+
+      if (!result.success) {
+        throw new Error("Failed to analyze PRD");
+      }
+
+      // Parse the JSON response
+      const jsonMatch = result.output.match(/\[[\s\S]*\]/);
+      if (!jsonMatch) {
+        throw new Error("Failed to parse shard definitions from AI response");
+      }
+
+      const shards = JSON.parse(jsonMatch[0]) as ShardDraft[];
+      
+      // Validate architecture shard exists
+      if (!shards.some(s => s.id === "shard-00-architecture")) {
+        throw new Error("AI response missing required shard-00-architecture");
+      }
+
+      setSprintData((prev) => ({ ...prev, shardDrafts: shards }));
+      setLoading(false);
+      setStep("review-shards");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to analyze PRD");
+      setLoading(false);
+    }
+  };
+
+  // Analyze user-provided requirements for bug/feature/enhancement sprints
   const runAnalyzePatterns = async () => {
     setLoading(true);
     setLoadingMessage("Analyzing requirements and breaking into atomic shards...");
@@ -504,7 +615,8 @@ ${shard.acceptanceCriteria.map((c) => `- [ ] ${c}`).join("\n")}
             // Check if current project has PRD
             const hasPrdResult = await hasPrd(projectPath);
             setProjectHasPrd(hasPrdResult);
-            setStep(hasPrdResult ? "name" : "prd-qa");
+            // Has PRD -> sprint type selection, no PRD -> PRD Q&A first
+            setStep(hasPrdResult ? "sprint-type" : "prd-qa");
           } else if (value === "new") {
             // Show prompt for new project name
             setNewProjectName("");
@@ -517,7 +629,8 @@ ${shard.acceptanceCriteria.map((c) => `- [ ] ${c}`).join("\n")}
             // Check if project has PRD
             const hasPrdResult = await hasPrd(newPath);
             setProjectHasPrd(hasPrdResult);
-            setStep(hasPrdResult ? "name" : "prd-qa");
+            // Has PRD -> sprint type selection, no PRD -> PRD Q&A first
+            setStep(hasPrdResult ? "sprint-type" : "prd-qa");
           }
         };
 
@@ -590,7 +703,8 @@ ${shard.acceptanceCriteria.map((c) => `- [ ] ${c}`).join("\n")}
                 await updatePrdFromAnswers(selectedProjectPath, answers);
                 setProjectHasPrd(true);
                 setLoading(false);
-                setStep("name");
+                // After PRD, go to sprint type selection
+                setStep("sprint-type");
               } catch (err) {
                 setError(err instanceof Error ? err.message : "Failed to save PRD");
                 setLoading(false);
@@ -598,6 +712,69 @@ ${shard.acceptanceCriteria.map((c) => `- [ ] ${c}`).join("\n")}
             }}
             onCancel={() => setStep("select-project")}
           />
+        );
+
+      case "sprint-type":
+        const sprintTypeItems: MenuItem[] = [
+          { 
+            label: "🚀 Initial Implementation", 
+            value: "initial",
+            hint: "First sprint - analyze PRD and build MVP"
+          },
+          { 
+            label: "✨ New Feature", 
+            value: "feature",
+            hint: "Add new functionality to existing project"
+          },
+          { 
+            label: "🔧 Enhancement", 
+            value: "enhancement",
+            hint: "Improve existing features"
+          },
+          { 
+            label: "🐛 Bug Fix", 
+            value: "bugfix",
+            hint: "Fix issues and defects"
+          },
+          { label: "← Back", value: "back" },
+        ];
+
+        return (
+          <Box flexDirection="column">
+            <Text bold color="cyan">What type of sprint is this?</Text>
+            <Text color="gray" dimColor>
+              {sprintData.sprintType === "initial" 
+                ? "Initial sprints analyze the PRD to generate implementation shards"
+                : "Other sprints let you describe specific requirements"}
+            </Text>
+            <Box marginTop={1}>
+              <Menu 
+                items={sprintTypeItems} 
+                onSelect={(value) => {
+                  if (value === "back") {
+                    setStep("select-project");
+                  } else {
+                    const type = value as SprintType;
+                    setSprintData(prev => ({ ...prev, sprintType: type }));
+                    
+                    if (type === "initial") {
+                      // Initial sprint: auto-name and skip to analysis
+                      setSprintData(prev => ({ 
+                        ...prev, 
+                        name: "Initial Implementation",
+                        description: "Implement MVP based on PRD"
+                      }));
+                      setStep("analyze-patterns");
+                      runAnalyzePrd();
+                    } else {
+                      // Bug/feature/enhancement: go through name/description/requirements
+                      setStep("name");
+                    }
+                  }
+                }}
+              />
+            </Box>
+          </Box>
         );
 
       case "name":
