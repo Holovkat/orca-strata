@@ -35,11 +35,12 @@ export function DroidChat({
   const [currentResponse, setCurrentResponse] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [conversationHistory, setConversationHistory] = useState<string>("");
+  const [expandedMessage, setExpandedMessage] = useState<number | null>(null);
   const { stdout } = useStdout();
 
   // Calculate visible lines based on terminal height
-  const terminalHeight = stdout?.rows || 24;
-  const visibleMessages = Math.max(5, terminalHeight - 12);
+  const terminalHeight = stdout?.rows || 40;
+  const maxLines = Math.max(15, terminalHeight - 10);
 
   // Send initial prompt on mount
   useEffect(() => {
@@ -67,6 +68,7 @@ export function DroidChat({
     setIsWaiting(true);
     setCurrentResponse("");
     setError(null);
+    setExpandedMessage(null);
 
     try {
       // Build context with conversation history
@@ -127,18 +129,45 @@ export function DroidChat({
 
   useInput((char, key) => {
     if (key.escape) {
-      onBack();
+      if (expandedMessage !== null) {
+        setExpandedMessage(null);
+      } else {
+        onBack();
+      }
     }
     if (key.ctrl && char === "c") {
       onBack();
     }
+    // Number keys 1-9 to expand message
+    if (!isWaiting && char >= "1" && char <= "9") {
+      const idx = parseInt(char) - 1;
+      if (idx < messages.length) {
+        setExpandedMessage(expandedMessage === idx ? null : idx);
+      }
+    }
   });
 
-  // Get messages to display (most recent)
-  const displayMessages = messages.slice(-visibleMessages);
+  // If a message is expanded, show it full screen
+  if (expandedMessage !== null && messages[expandedMessage]) {
+    const msg = messages[expandedMessage];
+    return (
+      <Box flexDirection="column" padding={1}>
+        <Text bold color="cyan">Full Message ({msg.role})</Text>
+        <Text color="gray" dimColor>Press Esc to go back, or number key to view another message</Text>
+        <Box marginTop={1} flexDirection="column">
+          <Text color={msg.role === "user" ? "blue" : msg.role === "assistant" ? "green" : "gray"} wrap="wrap">
+            {msg.content}
+          </Text>
+        </Box>
+      </Box>
+    );
+  }
+
+  // Show last few messages based on terminal height
+  const recentMessages = messages.slice(-5);
 
   return (
-    <Box flexDirection="column" height={terminalHeight - 4}>
+    <Box flexDirection="column">
       {/* Header */}
       <Box marginBottom={1} flexDirection="column">
         <Box gap={2}>
@@ -151,16 +180,24 @@ export function DroidChat({
       {error && <StatusMessage type="error" message={error} />}
 
       {/* Messages */}
-      <Box flexDirection="column" flexGrow={1} overflowY="hidden">
-        {displayMessages.map((msg, i) => (
-          <MessageBubble key={i} message={msg} />
-        ))}
+      <Box flexDirection="column" marginBottom={1}>
+        {recentMessages.map((msg, i) => {
+          const globalIdx = messages.length - recentMessages.length + i;
+          return (
+            <MessageBubble 
+              key={globalIdx} 
+              message={msg} 
+              index={globalIdx + 1}
+              maxLines={maxLines}
+            />
+          );
+        })}
 
         {/* Current streaming response */}
         {currentResponse && (
-          <Box marginY={1}>
+          <Box marginY={1} flexDirection="column">
             <Text color="green">◆ </Text>
-            <Text wrap="wrap">{currentResponse.slice(-500)}</Text>
+            <Text color="green" wrap="wrap">{currentResponse}</Text>
           </Box>
         )}
 
@@ -173,7 +210,7 @@ export function DroidChat({
       </Box>
 
       {/* Input */}
-      <Box marginTop={1} borderStyle="single" borderColor="cyan" paddingX={1}>
+      <Box borderStyle="single" borderColor="cyan" paddingX={1}>
         <Text color="cyan">You: </Text>
         <TextInput
           value={input}
@@ -185,13 +222,19 @@ export function DroidChat({
 
       {/* Footer */}
       <Box marginTop={1}>
-        <Text color="gray">Enter to send • Esc to exit</Text>
+        <Text color="gray">Enter send • Esc exit • 1-9 expand message</Text>
       </Box>
     </Box>
   );
 }
 
-function MessageBubble({ message }: { message: ChatMessage }) {
+interface MessageBubbleProps {
+  message: ChatMessage;
+  index: number;
+  maxLines: number;
+}
+
+function MessageBubble({ message, index, maxLines }: MessageBubbleProps) {
   const roleColors: Record<string, string> = {
     user: "blue",
     assistant: "green",
@@ -207,25 +250,26 @@ function MessageBubble({ message }: { message: ChatMessage }) {
   const color = roleColors[message.role] || "white";
   const icon = roleIcons[message.role] || "•";
 
-  // Truncate long messages for display
-  const maxLength = 500;
-  const displayContent = message.content.length > maxLength
-    ? message.content.slice(0, maxLength) + "..."
-    : message.content;
-
-  // Show only first few lines
-  const lines = displayContent.split("\n");
-  const displayLines = lines.slice(0, 5);
-  const hasMore = lines.length > 5;
+  // Show more lines - up to maxLines or 20
+  const lines = message.content.split("\n");
+  const linesToShow = Math.min(maxLines, 20);
+  const displayLines = lines.slice(0, linesToShow);
+  const hasMore = lines.length > linesToShow;
 
   return (
     <Box marginY={0} flexDirection="column">
-      <Box>
-        <Text color={color as any}>{icon} </Text>
-        <Text color={color as any} wrap="wrap">
-          {displayLines.join("\n")}
-          {hasMore && `\n... (${lines.length - 5} more lines)`}
+      <Box flexDirection="column">
+        <Text color={color as any}>
+          {icon} [{index}] {message.role === "user" ? "You" : message.role === "assistant" ? "Droid" : "System"}
         </Text>
+        <Box marginLeft={2}>
+          <Text color={color as any} wrap="wrap">
+            {displayLines.join("\n")}
+            {hasMore && (
+              <Text color="yellow">{`\n... (${lines.length - linesToShow} more lines - press ${index} to expand)`}</Text>
+            )}
+          </Text>
+        </Box>
       </Box>
     </Box>
   );
