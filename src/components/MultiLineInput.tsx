@@ -159,7 +159,7 @@ export function MultiLineInput({
         return;
       }
       
-      if (key.backspace) {
+      if (key.backspace || key.delete) {
         setFileSearchQuery(prev => prev.slice(0, -1));
         return;
       }
