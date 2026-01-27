@@ -13,7 +13,13 @@ program
   .option("-c, --config <path>", "Config file path", ".orchestrator.yaml")
   .action(async (options) => {
     const config = await loadConfig(options.project, options.config);
-    render(<App config={config} projectPath={options.project} />);
+    render(
+      <App 
+        config={config} 
+        projectPath={options.project} 
+        configFile={options.config}
+      />
+    );
   });
 
 program.parse();
