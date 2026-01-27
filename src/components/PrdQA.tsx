@@ -68,6 +68,7 @@ export function PrdQA({ projectName, projectPath, initialAnswers, onComplete, on
   });
   const [currentInput, setCurrentInput] = useState("");
   const [editingKey, setEditingKey] = useState<keyof PrdAnswers | null>(null);
+  const [filePickerOpen, setFilePickerOpen] = useState(false);
 
   const handleAnswerSubmit = (value: string) => {
     const question = QUESTIONS[currentQuestion];
@@ -106,11 +107,14 @@ export function PrdQA({ projectName, projectPath, initialAnswers, onComplete, on
               onChange={setCurrentInput}
               onSubmit={handleEditSubmit}
               onCancel={() => {
-                setEditingKey(null);
-                setCurrentInput("");
+                if (!filePickerOpen) {
+                  setEditingKey(null);
+                  setCurrentInput("");
+                }
               }}
               minHeight={5}
               projectPath={projectPath}
+              onFilePickerChange={setFilePickerOpen}
             />
           </Box>
         </Box>
@@ -201,10 +205,15 @@ export function PrdQA({ projectName, projectPath, initialAnswers, onComplete, on
             value={currentInput}
             onChange={setCurrentInput}
             onSubmit={handleAnswerSubmit}
-            onCancel={onCancel}
+            onCancel={() => {
+              if (!filePickerOpen) {
+                onCancel();
+              }
+            }}
             placeholder="Type your answer... (@ to reference files)"
             minHeight={4}
             projectPath={projectPath}
+            onFilePickerChange={setFilePickerOpen}
           />
         </Box>
       </Box>

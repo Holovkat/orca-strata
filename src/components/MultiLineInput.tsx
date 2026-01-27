@@ -10,6 +10,7 @@ interface MultiLineInputProps {
   placeholder?: string;
   minHeight?: number;
   projectPath?: string; // For @ file references
+  onFilePickerChange?: (isOpen: boolean) => void; // Notify parent when file picker opens/closes
 }
 
 interface FileEntry {
@@ -26,6 +27,7 @@ export function MultiLineInput({
   placeholder = "Type here...",
   minHeight = 3,
   projectPath,
+  onFilePickerChange,
 }: MultiLineInputProps) {
   const [cursorPos, setCursorPos] = useState(value.length);
   const { stdout } = useStdout();
@@ -210,6 +212,7 @@ export function MultiLineInput({
         // First Esc closes file picker, returns to editing
         setShowFilePicker(false);
         setFileSearchQuery("");
+        onFilePickerChange?.(false);
         return;
       }
       
@@ -239,6 +242,7 @@ export function MultiLineInput({
             setCursorPos(cursorPos + reference.length);
             setShowFilePicker(false);
             setFileSearchQuery("");
+            onFilePickerChange?.(false);
           }
         }
         return;
@@ -295,6 +299,7 @@ export function MultiLineInput({
     if (input === "@" && projectPath) {
       setShowFilePicker(true);
       setFileSearchQuery("");
+      onFilePickerChange?.(true);
       return;
     }
 
