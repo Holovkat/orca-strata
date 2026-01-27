@@ -1,13 +1,14 @@
 import React, { useState } from "react";
 import { Box, Text, useInput } from "ink";
 import { Menu, type MenuItem } from "../components/Menu.js";
-import type { OrcaConfig, SprintStatus } from "../lib/types.js";
+import type { OrcaConfig, SprintStatus, Shard } from "../lib/types.js";
 
 interface ViewStatusProps {
   config: OrcaConfig;
   projectPath: string;
   sprintStatus: SprintStatus | null;
   onBack: () => void;
+  onEditShard?: (shard: Shard) => void;
 }
 
 type SubScreen = "menu" | "board" | "issues" | "droids" | "shards";
@@ -17,6 +18,7 @@ export function ViewStatus({
   projectPath,
   sprintStatus,
   onBack,
+  onEditShard,
 }: ViewStatusProps) {
   const [subScreen, setSubScreen] = useState<SubScreen>("menu");
 
@@ -49,7 +51,7 @@ export function ViewStatus({
         : "None",
     },
     {
-      label: "View Shards",
+      label: "Edit Shards",
       value: "shards",
       hint: sprintStatus
         ? `${sprintStatus.sprint.shards.length} total`
@@ -70,7 +72,12 @@ export function ViewStatus({
       case "droids":
         return <DroidsView sprintStatus={sprintStatus} />;
       case "shards":
-        return <ShardsView sprintStatus={sprintStatus} />;
+        return (
+          <ShardsView
+            sprintStatus={sprintStatus}
+            onEditShard={onEditShard}
+          />
+        );
       default:
         return (
           <Menu
@@ -177,7 +184,12 @@ function DroidsView({ sprintStatus }: { sprintStatus: SprintStatus | null }) {
   );
 }
 
-function ShardsView({ sprintStatus }: { sprintStatus: SprintStatus | null }) {
+interface ShardsViewProps {
+  sprintStatus: SprintStatus | null;
+  onEditShard?: (shard: Shard) => void;
+}
+
+function ShardsView({ sprintStatus, onEditShard }: ShardsViewProps) {
   if (!sprintStatus) {
     return <Text color="gray">No active sprint</Text>;
   }
@@ -193,20 +205,32 @@ function ShardsView({ sprintStatus }: { sprintStatus: SprintStatus | null }) {
     "Done": "green",
   };
 
+  // Convert shards to menu items
+  const shardItems: MenuItem[] = sprintStatus.sprint.shards.map((shard) => ({
+    label: `${shard.title}`,
+    value: shard.id,
+    hint: `[${shard.type}] ${shard.status}`,
+  }));
+
+  shardItems.push({ label: "Back to Menu", value: "__back__" });
+
   return (
     <Box flexDirection="column">
-      <Text bold>Shards</Text>
-      <Box marginY={1} flexDirection="column">
-        {sprintStatus.sprint.shards.map((shard) => (
-          <Box key={shard.id} gap={1}>
-            <Text color={statusColors[shard.status] as any}>●</Text>
-            <Text>{shard.title}</Text>
-            <Text color="gray">[{shard.type}]</Text>
-            {shard.assignedDroid && (
-              <Text color="yellow">→ {shard.assignedDroid}</Text>
-            )}
-          </Box>
-        ))}
+      <Text bold>Shards - Click/Enter to Edit</Text>
+      <Text color="gray" dimColor>Editing a shard will reset its status if content changes</Text>
+      <Box marginY={1}>
+        <Menu
+          items={shardItems}
+          onSelect={(value) => {
+            if (value === "__back__") {
+              return;
+            }
+            const shard = sprintStatus.sprint.shards.find(s => s.id === value);
+            if (shard && onEditShard) {
+              onEditShard(shard);
+            }
+          }}
+        />
       </Box>
     </Box>
   );

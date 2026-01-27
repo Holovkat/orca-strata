@@ -7,10 +7,11 @@ import { ContinueSprint } from "./screens/ContinueSprint.js";
 import { ViewStatus } from "./screens/ViewStatus.js";
 import { ManualActions } from "./screens/ManualActions.js";
 import { Settings } from "./screens/Settings.js";
+import { ShardEditor } from "./screens/ShardEditor.js";
 import { Header } from "./components/Header.js";
 import { Spinner } from "./components/Spinner.js";
 import { deriveSprintStatus, refreshStatus } from "./lib/state.js";
-import type { OrcaConfig, Screen, SprintStatus } from "./lib/types.js";
+import type { OrcaConfig, Screen, SprintStatus, Shard } from "./lib/types.js";
 
 interface AppProps {
   config: OrcaConfig;
@@ -22,6 +23,7 @@ export function App({ config, projectPath }: AppProps) {
   const [sprintStatus, setSprintStatus] = useState<SprintStatus | null>(null);
   const [currentConfig, setCurrentConfig] = useState(config);
   const [loading, setLoading] = useState(true);
+  const [selectedShard, setSelectedShard] = useState<Shard | null>(null);
 
   // Derive state from sources of truth on startup
   useEffect(() => {
@@ -44,6 +46,28 @@ export function App({ config, projectPath }: AppProps) {
     setSprintStatus(status);
     setScreen("continue-sprint");
   }, []);
+
+  // Handle shard selection for editing
+  const handleEditShard = useCallback((shard: Shard) => {
+    setSelectedShard(shard);
+    setScreen("shard-editor");
+  }, []);
+
+  // Handle shard update
+  const handleShardUpdated = useCallback((updatedShard: Shard) => {
+    if (sprintStatus) {
+      const updatedShards = sprintStatus.sprint.shards.map(s =>
+        s.id === updatedShard.id ? updatedShard : s
+      );
+      setSprintStatus({
+        ...sprintStatus,
+        sprint: {
+          ...sprintStatus.sprint,
+          shards: updatedShards,
+        },
+      });
+    }
+  }, [sprintStatus]);
 
   // Refresh status from sources of truth
   const handleRefresh = useCallback(async () => {
@@ -98,8 +122,22 @@ export function App({ config, projectPath }: AppProps) {
             projectPath={projectPath}
             sprintStatus={sprintStatus}
             onBack={() => setScreen("main")}
+            onEditShard={handleEditShard}
           />
         );
+      case "shard-editor":
+        if (selectedShard) {
+          return (
+            <ShardEditor
+              config={currentConfig}
+              projectPath={projectPath}
+              shard={selectedShard}
+              onBack={() => setScreen("view-status")}
+              onShardUpdated={handleShardUpdated}
+            />
+          );
+        }
+        return <MainMenu onSelect={setScreen} sprintStatus={sprintStatus} />;
       case "manual-actions":
         return (
           <ManualActions
