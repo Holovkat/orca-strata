@@ -112,7 +112,7 @@ export async function createWorktreeWithNewBranch(
   path: string,
   branch: string,
   cwd?: string
-): Promise<boolean> {
+): Promise<{ success: boolean; error?: string }> {
   const parentDir = join(path, "..");
   try {
     await mkdir(parentDir, { recursive: true });
@@ -121,7 +121,10 @@ export async function createWorktreeWithNewBranch(
   }
 
   const result = await runGit(["worktree", "add", "-b", branch, path], cwd);
-  return result.code === 0;
+  if (result.code !== 0) {
+    return { success: false, error: result.stderr || "Failed to create worktree" };
+  }
+  return { success: true };
 }
 
 export async function removeWorktree(

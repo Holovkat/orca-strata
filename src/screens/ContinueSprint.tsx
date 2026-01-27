@@ -334,7 +334,11 @@ function BuildPhase({
       const branchName = `${sprintStatus.sprint.branch}-${shard.id}`;
 
       setLoadingMessage(`Creating worktree for ${shard.id}...`);
-      await createWorktreeWithNewBranch(worktreePath, branchName, projectPath);
+      const worktreeResult = await createWorktreeWithNewBranch(worktreePath, branchName, projectPath);
+      if (!worktreeResult.success) {
+        // Worktree might already exist, try to continue anyway
+        appendDroidOutput?.(`[Worktree warning: ${worktreeResult.error}]\n`);
+      }
 
       // Update shard status
       const updatedShards = sprintStatus.sprint.shards.map((s) =>
