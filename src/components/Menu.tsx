@@ -1,7 +1,5 @@
-import React, { useRef, useState } from "react";
+import React, { useState } from "react";
 import { Box, Text, useInput } from "ink";
-import type { DOMElement } from "ink";
-import { useOnMouseClick, useOnMouseHover } from "@zenobius/ink-mouse";
 
 export interface MenuItem {
   label: string;
@@ -42,65 +40,22 @@ export function Menu({ items, onSelect, title }: MenuProps) {
           </Text>
         </Box>
       )}
-      {enabledItems.map((item, index) => (
-        <MenuItemRow
-          key={item.value}
-          item={item}
-          isSelected={index === selectedIndex}
-          onSelect={() => onSelect(item.value)}
-          onHover={() => setSelectedIndex(index)}
-        />
-      ))}
+      {enabledItems.map((item, index) => {
+        const isSelected = index === selectedIndex;
+        const label = item.hint ? `${item.label} - ${item.hint}` : item.label;
+        
+        return (
+          <Box key={item.value} paddingX={1}>
+            <Text color={isSelected ? "cyan" : "white"}>
+              {isSelected ? "❯ " : "  "}
+              {label}
+            </Text>
+          </Box>
+        );
+      })}
       <Box marginTop={1}>
-        <Text color="gray">↑↓ Navigate • Enter/Click Select • q Quit</Text>
+        <Text color="gray">↑↓ Navigate • Enter Select • q Quit</Text>
       </Box>
-    </Box>
-  );
-}
-
-interface MenuItemRowProps {
-  item: MenuItem;
-  isSelected: boolean;
-  onSelect: () => void;
-  onHover: () => void;
-}
-
-function MenuItemRow({ item, isSelected, onSelect, onHover }: MenuItemRowProps) {
-  const ref = useRef<DOMElement>(null);
-  const [isHovering, setIsHovering] = useState(false);
-  const [isClicking, setIsClicking] = useState(false);
-
-  // Cast to satisfy ink-mouse's stricter type (doesn't allow null)
-  const mouseRef = ref as React.RefObject<DOMElement>;
-
-  useOnMouseHover(mouseRef, (hovering) => {
-    setIsHovering(hovering);
-    if (hovering) {
-      onHover();
-    }
-  });
-
-  useOnMouseClick(mouseRef, (clicking) => {
-    setIsClicking(clicking);
-    if (clicking) {
-      onSelect();
-    }
-  });
-
-  const getColor = () => {
-    if (isClicking) return "green";
-    if (isSelected || isHovering) return "cyan";
-    return "white";
-  };
-
-  const label = item.hint ? `${item.label} - ${item.hint}` : item.label;
-
-  return (
-    <Box ref={ref} paddingX={1}>
-      <Text color={getColor()}>
-        {isSelected ? "❯ " : "  "}
-        {label}
-      </Text>
     </Box>
   );
 }
