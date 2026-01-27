@@ -187,14 +187,34 @@ export function MultiLineInput({
     return () => { cancelled = true; };
   }, [showFilePicker, projectPath, allEntries.length, isAbsolutePath, fileSearchQuery]);
 
-  // Filter entries based on search query (fuzzy match on path) - only for project-relative searches
+  // Convert glob pattern to regex
+  const globToRegex = (glob: string): RegExp => {
+    const escaped = glob
+      .replace(/[.+^${}()|[\]\\]/g, '\\$&') // Escape regex special chars except * and ?
+      .replace(/\*\*/g, '{{GLOBSTAR}}')      // Temp placeholder for **
+      .replace(/\*/g, '[^/]*')               // * matches anything except /
+      .replace(/\?/g, '.')                   // ? matches single char
+      .replace(/{{GLOBSTAR}}/g, '.*');       // ** matches anything including /
+    return new RegExp(escaped, 'i');
+  };
+
+  // Check if query contains glob wildcards
+  const hasWildcard = (q: string) => /[*?]/.test(q);
+
+  // Filter entries based on search query (fuzzy match or glob) - only for project-relative searches
   useEffect(() => {
     // Skip for absolute paths - handled in the load effect
     if (isAbsolutePath) return;
     
     if (!fileSearchQuery) {
       setFilteredEntries(allEntries.slice(0, 20));
+    } else if (hasWildcard(fileSearchQuery)) {
+      // Glob pattern matching
+      const regex = globToRegex(fileSearchQuery.toLowerCase());
+      const matches = allEntries.filter(e => regex.test(e.path.toLowerCase()));
+      setFilteredEntries(matches.slice(0, 20));
     } else {
+      // Simple substring matching
       const query = fileSearchQuery.toLowerCase();
       const matches = allEntries.filter(e => 
         e.path.toLowerCase().includes(query) || 
@@ -393,7 +413,7 @@ export function MultiLineInput({
         >
           <Box marginBottom={1}>
             <Text bold color="yellow">@ File Reference</Text>
-            <Text color="gray"> - {isAbsolutePath ? "browsing filesystem" : "type to search (~ or / for absolute path)"}</Text>
+            <Text color="gray"> - {isAbsolutePath ? "browsing filesystem" : "search with * ? wildcards (~ or / for absolute)"}</Text>
           </Box>
           <Box marginBottom={1}>
             <Text color="cyan">{isAbsolutePath ? "Path: " : "Search: "}</Text>
