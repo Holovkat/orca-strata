@@ -11,14 +11,16 @@ import { DroidChat } from "./screens/DroidChat.js";
 import { Header } from "./components/Header.js";
 import { Spinner } from "./components/Spinner.js";
 import { deriveSprintStatus, refreshStatus } from "./lib/state.js";
+import { saveConfig } from "./lib/config.js";
 import type { OrcaConfig, Screen, SprintStatus, Shard } from "./lib/types.js";
 
 interface AppProps {
   config: OrcaConfig;
   projectPath: string;
+  configFile: string;
 }
 
-export function App({ config, projectPath }: AppProps) {
+export function App({ config, projectPath, configFile }: AppProps) {
   const [screen, setScreen] = useState<Screen>("main");
   const [sprintStatus, setSprintStatus] = useState<SprintStatus | null>(null);
   const [currentConfig, setCurrentConfig] = useState(config);
@@ -36,6 +38,17 @@ export function App({ config, projectPath }: AppProps) {
 
     init();
   }, [projectPath, currentConfig]);
+
+  // Handle config changes - save to file
+  const handleConfigChange = useCallback(async (newConfig: OrcaConfig) => {
+    setCurrentConfig(newConfig);
+    try {
+      await saveConfig(projectPath, configFile, newConfig);
+    } catch (err) {
+      // Config save failed, but we still update in-memory
+      console.error("Failed to save config:", err);
+    }
+  }, [projectPath, configFile]);
 
   // Handle sprint status changes (runtime only - active droids, etc.)
   const handleSprintStatusChange = useCallback((status: SprintStatus | null) => {
@@ -184,7 +197,7 @@ export function App({ config, projectPath }: AppProps) {
           <Settings
             config={currentConfig}
             onBack={() => setScreen("main")}
-            onConfigChange={setCurrentConfig}
+            onConfigChange={handleConfigChange}
           />
         );
       default:

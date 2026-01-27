@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { Box, Text, useInput, useStdout } from "ink";
 import TextInput from "ink-text-input";
 import { Spinner } from "../components/Spinner.js";
 import { StatusMessage } from "../components/StatusMessage.js";
-import { DroidSession, createDroidSession } from "../lib/droid-session.js";
+import { invokeDroid } from "../lib/droid.js";
 import type { OrcaConfig, Shard } from "../lib/types.js";
 
 interface DroidChatProps {
@@ -16,9 +16,8 @@ interface DroidChatProps {
 }
 
 interface ChatMessage {
-  role: "user" | "assistant" | "system" | "tool";
+  role: "user" | "assistant" | "system";
   content: string;
-  toolName?: string;
   timestamp: Date;
 }
 
@@ -34,152 +33,103 @@ export function DroidChat({
   const [input, setInput] = useState("");
   const [isWaiting, setIsWaiting] = useState(false);
   const [currentResponse, setCurrentResponse] = useState("");
-  const [currentTool, setCurrentTool] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const sessionRef = useRef<DroidSession | null>(null);
+  const [conversationHistory, setConversationHistory] = useState<string>("");
   const { stdout } = useStdout();
 
   // Calculate visible lines based on terminal height
   const terminalHeight = stdout?.rows || 24;
   const visibleMessages = Math.max(5, terminalHeight - 12);
 
-  // Initialize session
+  // Send initial prompt on mount
   useEffect(() => {
-    const session = createDroidSession(config, {
-      cwd: projectPath,
-    });
-    sessionRef.current = session;
-
-    // Set up event handlers
-    session.on("started", () => {
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "system",
-          content: `Session started with model: ${config.droids.model}`,
-          timestamp: new Date(),
-        },
-      ]);
-
-      // Send initial prompt if provided
-      if (initialPrompt) {
-        sendMessage(initialPrompt);
-      }
-    });
-
-    session.on("text", (text: string) => {
-      setCurrentResponse((prev) => prev + text);
-    });
-
-    session.on("tool_start", ({ toolName }: { toolName: string }) => {
-      setCurrentTool(toolName);
-    });
-
-    session.on("tool_use", ({ toolName, input }: { toolName: string; input: any }) => {
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "tool",
-          content: typeof input === "string" ? input : JSON.stringify(input, null, 2),
-          toolName,
-          timestamp: new Date(),
-        },
-      ]);
-    });
-
-    session.on("block_stop", () => {
-      setCurrentTool(null);
-    });
-
-    session.on("message_stop", () => {
-      // Flush current response to messages
-      setCurrentResponse((current) => {
-        if (current.trim()) {
-          setMessages((prev) => [
-            ...prev,
-            {
-              role: "assistant",
-              content: current,
-              timestamp: new Date(),
-            },
-          ]);
-        }
-        return "";
-      });
-      setIsWaiting(false);
-    });
-
-    session.on("session_id", (id: string) => {
-      setSessionId(id);
-    });
-
-    session.on("error", (err: Error) => {
-      setError(err.message);
-      setIsWaiting(false);
-    });
-
-    session.on("close", (code: number) => {
-      if (code !== 0) {
-        setError(`Session ended with code ${code}`);
-      }
-      onComplete?.(code === 0);
-    });
-
-    session.on("stderr", (text: string) => {
-      // Show stderr as system messages
-      if (text.trim()) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            role: "system",
-            content: text,
-            timestamp: new Date(),
-          },
-        ]);
-      }
-    });
-
-    // Start the session
-    session.start();
-
-    return () => {
-      session.stop();
-    };
-  }, [config, projectPath, initialPrompt, onComplete]);
-
-  const sendMessage = useCallback((content: string) => {
-    if (!sessionRef.current || !content.trim()) return;
-
-    setMessages((prev) => [
-      ...prev,
-      {
-        role: "user",
-        content,
+    if (initialPrompt) {
+      sendMessage(initialPrompt);
+    } else {
+      setMessages([{
+        role: "system",
+        content: `Chat session started. Model: ${config.droids.model}`,
         timestamp: new Date(),
-      },
-    ]);
+      }]);
+    }
+  }, []); // Only run once on mount
+
+  const sendMessage = useCallback(async (content: string) => {
+    if (!content.trim()) return;
+
+    // Add user message
+    const userMessage: ChatMessage = {
+      role: "user",
+      content,
+      timestamp: new Date(),
+    };
+    setMessages(prev => [...prev, userMessage]);
     setIsWaiting(true);
     setCurrentResponse("");
-    sessionRef.current.sendMessage(content);
-  }, []);
+    setError(null);
+
+    try {
+      // Build context with conversation history
+      const contextPrompt = conversationHistory
+        ? `Previous conversation:\n${conversationHistory}\n\nUser: ${content}`
+        : content;
+
+      const result = await invokeDroid(
+        {
+          droid: "assistant", // Generic assistant mode
+          prompt: contextPrompt,
+          autoLevel: config.droids.auto_level,
+          model: config.droids.model,
+          cwd: projectPath,
+        },
+        config,
+        (chunk) => {
+          setCurrentResponse(prev => prev + chunk);
+        }
+      );
+
+      // Add assistant message
+      const assistantMessage: ChatMessage = {
+        role: "assistant",
+        content: result.output || currentResponse,
+        timestamp: new Date(),
+      };
+      setMessages(prev => [...prev, assistantMessage]);
+
+      // Update conversation history for context
+      setConversationHistory(prev => 
+        prev + `\nUser: ${content}\nAssistant: ${result.output || currentResponse}`
+      );
+
+      if (!result.success) {
+        setError("Droid returned an error");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to get response");
+      setMessages(prev => [...prev, {
+        role: "system",
+        content: `Error: ${err instanceof Error ? err.message : "Unknown error"}`,
+        timestamp: new Date(),
+      }]);
+    } finally {
+      setIsWaiting(false);
+      setCurrentResponse("");
+    }
+  }, [config, projectPath, conversationHistory, currentResponse]);
 
   const handleSubmit = useCallback(() => {
     if (input.trim() && !isWaiting) {
-      sendMessage(input);
+      const message = input;
       setInput("");
+      sendMessage(message);
     }
   }, [input, isWaiting, sendMessage]);
 
   useInput((char, key) => {
     if (key.escape) {
-      if (sessionRef.current?.isActive()) {
-        sessionRef.current.stop();
-      }
       onBack();
     }
     if (key.ctrl && char === "c") {
-      sessionRef.current?.kill();
       onBack();
     }
   });
@@ -194,7 +144,6 @@ export function DroidChat({
         <Box gap={2}>
           <Text bold color="cyan">Droid Chat</Text>
           {shard && <Text color="gray">Shard: {shard.title}</Text>}
-          {sessionId && <Text color="gray" dimColor>Session: {sessionId.slice(0, 8)}...</Text>}
         </Box>
         <Text color="gray" dimColor>Model: {config.droids.model} | Auto: {config.droids.auto_level}</Text>
       </Box>
@@ -211,19 +160,12 @@ export function DroidChat({
         {currentResponse && (
           <Box marginY={1}>
             <Text color="green">◆ </Text>
-            <Text>{currentResponse}</Text>
-          </Box>
-        )}
-
-        {/* Current tool */}
-        {currentTool && (
-          <Box marginY={1}>
-            <Spinner message={`Running: ${currentTool}`} />
+            <Text wrap="wrap">{currentResponse.slice(-500)}</Text>
           </Box>
         )}
 
         {/* Waiting indicator */}
-        {isWaiting && !currentResponse && !currentTool && (
+        {isWaiting && !currentResponse && (
           <Box marginY={1}>
             <Spinner message="Thinking..." />
           </Box>
@@ -238,13 +180,12 @@ export function DroidChat({
           onChange={setInput}
           onSubmit={handleSubmit}
           placeholder={isWaiting ? "Waiting for response..." : "Type a message..."}
-          focus={!isWaiting}
         />
       </Box>
 
       {/* Footer */}
       <Box marginTop={1}>
-        <Text color="gray">Enter to send • Esc to exit • Ctrl+C to force quit</Text>
+        <Text color="gray">Enter to send • Esc to exit</Text>
       </Box>
     </Box>
   );
@@ -255,14 +196,12 @@ function MessageBubble({ message }: { message: ChatMessage }) {
     user: "blue",
     assistant: "green",
     system: "gray",
-    tool: "yellow",
   };
 
   const roleIcons: Record<string, string> = {
     user: "◇",
     assistant: "◆",
     system: "●",
-    tool: "⚙",
   };
 
   const color = roleColors[message.role] || "white";
@@ -274,16 +213,18 @@ function MessageBubble({ message }: { message: ChatMessage }) {
     ? message.content.slice(0, maxLength) + "..."
     : message.content;
 
+  // Show only first few lines
+  const lines = displayContent.split("\n");
+  const displayLines = lines.slice(0, 5);
+  const hasMore = lines.length > 5;
+
   return (
     <Box marginY={0} flexDirection="column">
       <Box>
         <Text color={color as any}>{icon} </Text>
-        {message.toolName && (
-          <Text color="yellow" dimColor>[{message.toolName}] </Text>
-        )}
         <Text color={color as any} wrap="wrap">
-          {displayContent.split("\n").slice(0, 3).join("\n")}
-          {displayContent.split("\n").length > 3 && "..."}
+          {displayLines.join("\n")}
+          {hasMore && `\n... (${lines.length - 5} more lines)`}
         </Text>
       </Box>
     </Box>
