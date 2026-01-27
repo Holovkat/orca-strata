@@ -1,8 +1,10 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Box, Text, useInput } from "ink";
 import { Menu, type MenuItem } from "../components/Menu.js";
 import { QuestionPrompt } from "../components/QuestionPrompt.js";
 import { StatusMessage } from "../components/StatusMessage.js";
+import { Spinner } from "../components/Spinner.js";
+import { getAllModels, type CustomModel } from "../lib/models.js";
 import type { OrcaConfig } from "../lib/types.js";
 
 interface SettingsProps {
@@ -19,6 +21,19 @@ export function Settings({ config, onBack, onConfigChange }: SettingsProps) {
     type: "success" | "error" | "info";
     text: string;
   } | null>(null);
+  const [models, setModels] = useState<CustomModel[]>([]);
+  const [loadingModels, setLoadingModels] = useState(false);
+
+  // Load models when entering model selection
+  useEffect(() => {
+    if (subScreen === "edit-model") {
+      setLoadingModels(true);
+      getAllModels().then((m) => {
+        setModels(m);
+        setLoadingModels(false);
+      });
+    }
+  }, [subScreen]);
 
   useInput((input, key) => {
     if (key.escape) {
@@ -30,6 +45,10 @@ export function Settings({ config, onBack, onConfigChange }: SettingsProps) {
     }
   });
 
+  // Find current model display name
+  const currentModelDisplay = models.find(m => m.id === config.droids.model)?.displayName 
+    || config.droids.model;
+
   const menuItems: MenuItem[] = [
     {
       label: "Project Name",
@@ -39,7 +58,9 @@ export function Settings({ config, onBack, onConfigChange }: SettingsProps) {
     {
       label: "Droid Model",
       value: "edit-model",
-      hint: config.droids.model,
+      hint: currentModelDisplay.length > 30 
+        ? currentModelDisplay.slice(0, 27) + "..." 
+        : currentModelDisplay,
     },
     {
       label: "Auto Level",
@@ -82,21 +103,47 @@ export function Settings({ config, onBack, onConfigChange }: SettingsProps) {
         );
 
       case "edit-model":
+        if (loadingModels) {
+          return <Spinner message="Loading models from Factory settings..." />;
+        }
+
+        // Group models by type
+        const builtinModels = models.filter(m => !m.id.startsWith("custom:"));
+        const customModels = models.filter(m => m.id.startsWith("custom:"));
+
         return (
-          <QuestionPrompt
-            question="Select droid model:"
-            type="select"
-            options={[
-              "claude-sonnet-4-5-20250929",
-              "claude-opus-4-5-20251101",
-              "gpt-5.1-codex",
-              "gemini-3-pro-preview",
-            ]}
-            onAnswer={(answer) =>
-              updateConfig({ droids: { ...config.droids, model: answer } })
-            }
-            onCancel={() => setSubScreen("menu")}
-          />
+          <Box flexDirection="column">
+            <Text bold color="cyan">Select Droid Model</Text>
+            <Text color="gray" dimColor>
+              {models.length} models available ({builtinModels.length} builtin, {customModels.length} custom)
+            </Text>
+            <Box marginTop={1}>
+              <Menu
+                items={[
+                  // Builtin models first
+                  ...builtinModels.map(m => ({
+                    label: m.displayName,
+                    value: m.id,
+                    hint: "builtin",
+                  })),
+                  // Then custom models
+                  ...customModels.map(m => ({
+                    label: m.displayName,
+                    value: m.id,
+                    hint: "custom",
+                  })),
+                  { label: "Cancel", value: "__cancel__" },
+                ]}
+                onSelect={(value) => {
+                  if (value === "__cancel__") {
+                    setSubScreen("menu");
+                  } else {
+                    updateConfig({ droids: { ...config.droids, model: value } });
+                  }
+                }}
+              />
+            </Box>
+          </Box>
         );
 
       case "edit-auto":
@@ -136,7 +183,6 @@ export function Settings({ config, onBack, onConfigChange }: SettingsProps) {
               if (value === "back") {
                 onBack();
               } else if (value === "view-config") {
-                // Just show config, stay on menu
                 setMessage({
                   type: "info",
                   text: "Config shown below",
