@@ -92,6 +92,12 @@ export function NewSprint({
   const [newProjectName, setNewProjectName] = useState<string>("");
   const [projectHasPrd, setProjectHasPrd] = useState<boolean>(false);
   const [prdAnswers, setPrdAnswers] = useState<PrdAnswers | null>(null);
+  
+  // Shard review state
+  type ShardReviewMode = "view" | "edit" | "rescope";
+  const [shardReviewMode, setShardReviewMode] = useState<ShardReviewMode>("view");
+  const [editingShardField, setEditingShardField] = useState<string>("");
+  const [rescopePrompt, setRescopePrompt] = useState<string>("");
 
   // Load existing projects from workspace
   useEffect(() => {
@@ -262,6 +268,114 @@ Return ONLY the JSON array, no other text.`;
       setError(err instanceof Error ? err.message : "Failed to analyze PRD");
       setLoading(false);
     }
+  };
+
+  // Rescope a shard with AI based on user feedback
+  const runRescopeShard = async (shardIndex: number, feedback: string) => {
+    setLoading(true);
+    setLoadingMessage("AI is rescoping the shard...");
+    setError(null);
+
+    const currentShard = sprintData.shardDrafts[shardIndex];
+    if (!currentShard) return;
+
+    try {
+      const prompt = `You need to rescope/modify this shard based on user feedback.
+
+## Current Shard
+\`\`\`json
+${JSON.stringify(currentShard, null, 2)}
+\`\`\`
+
+## User Feedback
+${feedback}
+
+## Your Task
+Modify the shard based on the user's feedback. Keep the same structure but adjust:
+- title, task, context as needed
+- acceptance criteria
+- creates/modifies arrays
+- dependencies if scope changed significantly
+
+Return ONLY a single JSON object (not an array) with the updated shard:
+\`\`\`json
+{
+  "id": "${currentShard.id}",
+  "title": "...",
+  "context": "...",
+  "task": "...",
+  "type": "...",
+  "requiredReading": [...],
+  "newInShard": [...],
+  "acceptanceCriteria": [...],
+  "creates": [...],
+  "dependsOn": [...],
+  "modifies": [...]
+}
+\`\`\`
+
+Return ONLY the JSON object, no other text.`;
+
+      const result = await invokeDroid(
+        {
+          droid: "technical-analyst",
+          prompt,
+          autoLevel: "low",
+          cwd: selectedProjectPath,
+        },
+        config,
+        (chunk) => setDroidOutput((prev) => prev + chunk)
+      );
+
+      if (!result.success) {
+        throw new Error("Failed to rescope shard");
+      }
+
+      // Parse the JSON response
+      const jsonMatch = result.output.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        throw new Error("Failed to parse rescoped shard from AI response");
+      }
+
+      const rescopedShard = JSON.parse(jsonMatch[0]) as ShardDraft;
+      
+      // Update the shard in the list
+      setSprintData((prev) => ({
+        ...prev,
+        shardDrafts: prev.shardDrafts.map((s, i) => 
+          i === shardIndex ? rescopedShard : s
+        ),
+      }));
+      
+      setLoading(false);
+      setShardReviewMode("view");
+      setRescopePrompt("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to rescope shard");
+      setLoading(false);
+    }
+  };
+
+  // Remove a shard from the list
+  const removeShard = (shardIndex: number) => {
+    setSprintData((prev) => ({
+      ...prev,
+      shardDrafts: prev.shardDrafts.filter((_, i) => i !== shardIndex),
+    }));
+    // If we removed the last shard, go back one
+    if (currentShardIndex >= sprintData.shardDrafts.length - 1) {
+      setCurrentShardIndex(Math.max(0, currentShardIndex - 1));
+    }
+  };
+
+  // Update a specific field on the current shard
+  const updateShardField = (shardIndex: number, field: string, value: string | string[]) => {
+    setSprintData((prev) => ({
+      ...prev,
+      shardDrafts: prev.shardDrafts.map((s, i) => 
+        i === shardIndex ? { ...s, [field]: value } : s
+      ),
+    }));
   };
 
   // Analyze user-provided requirements for bug/feature/enhancement sprints
@@ -823,44 +937,193 @@ ${shard.acceptanceCriteria.map((c) => `- [ ] ${c}`).join("\n")}
 
       case "review-shards":
         const currentShard = sprintData.shardDrafts[currentShardIndex];
+        
+        // Handle empty shards list
+        if (sprintData.shardDrafts.length === 0) {
+          return (
+            <Box flexDirection="column">
+              <StatusMessage type="error" message="No shards to review. All shards were removed." />
+              <Box marginTop={1}>
+                <Text color="gray">Press Esc to go back and try again.</Text>
+              </Box>
+            </Box>
+          );
+        }
+        
         if (!currentShard) return null;
+
+        // Rescope mode - ask AI to modify the shard
+        if (shardReviewMode === "rescope") {
+          return (
+            <Box flexDirection="column">
+              <Text bold color="cyan">Rescope Shard: {currentShard.title}</Text>
+              <Text color="gray" dimColor>Tell the AI how you want this shard changed</Text>
+              <Box marginTop={1}>
+                <QuestionPrompt
+                  question="What changes do you want? (e.g., 'make it smaller', 'focus only on X', 'split into backend and frontend')"
+                  type="text"
+                  onAnswer={(answer) => {
+                    if (answer.trim()) {
+                      runRescopeShard(currentShardIndex, answer);
+                    } else {
+                      setShardReviewMode("view");
+                    }
+                  }}
+                  onCancel={() => setShardReviewMode("view")}
+                />
+              </Box>
+            </Box>
+          );
+        }
+
+        // Edit mode - manually edit a field
+        if (shardReviewMode === "edit" && editingShardField) {
+          const fieldValue = (currentShard as unknown as Record<string, unknown>)[editingShardField];
+          const isArrayField = Array.isArray(fieldValue);
+          
+          return (
+            <Box flexDirection="column">
+              <Text bold color="cyan">Edit: {editingShardField}</Text>
+              <Text color="gray" dimColor>Current value: {isArrayField ? (fieldValue as string[]).join(", ") : String(fieldValue)}</Text>
+              <Box marginTop={1}>
+                <QuestionPrompt
+                  question={isArrayField ? "Enter new values (comma-separated):" : "Enter new value:"}
+                  type="text"
+                  onAnswer={(answer) => {
+                    const newValue = isArrayField 
+                      ? answer.split(",").map(s => s.trim()).filter(Boolean)
+                      : answer;
+                    updateShardField(currentShardIndex, editingShardField, newValue);
+                    setShardReviewMode("view");
+                    setEditingShardField("");
+                  }}
+                  onCancel={() => {
+                    setShardReviewMode("view");
+                    setEditingShardField("");
+                  }}
+                />
+              </Box>
+            </Box>
+          );
+        }
+
+        // View mode - show shard details with action menu
+        const shardReviewMenuItems: MenuItem[] = [
+          { label: "✓ Approve & Next", value: "approve", hint: "Accept this shard and continue" },
+          { label: "✎ Edit Field", value: "edit", hint: "Manually edit a specific field" },
+          { label: "🔄 AI Rescope", value: "rescope", hint: "Ask AI to modify this shard" },
+          { label: "✗ Reject & Remove", value: "reject", hint: "Remove this shard entirely" },
+          { label: "─────────────", value: "divider", disabled: true },
+          { label: "← Previous Shard", value: "prev", disabled: currentShardIndex === 0 },
+          { label: "→ Skip to Next", value: "next", disabled: currentShardIndex >= sprintData.shardDrafts.length - 1 },
+          { label: "─────────────", value: "divider2", disabled: true },
+          { label: "✓✓ Approve All Remaining", value: "approve-all", hint: "Skip review for remaining shards" },
+        ];
+
+        const editableFields: MenuItem[] = [
+          { label: "title", value: "title" },
+          { label: "task", value: "task" },
+          { label: "context", value: "context" },
+          { label: "type", value: "type" },
+          { label: "acceptanceCriteria", value: "acceptanceCriteria" },
+          { label: "creates", value: "creates" },
+          { label: "modifies", value: "modifies" },
+          { label: "dependsOn", value: "dependsOn" },
+          { label: "← Back", value: "back" },
+        ];
 
         return (
           <Box flexDirection="column">
             <Box marginBottom={1}>
               <Text bold color="cyan">
-                Shard {currentShardIndex + 1}/{sprintData.shardDrafts.length}
+                Review Shard {currentShardIndex + 1}/{sprintData.shardDrafts.length}
               </Text>
+              {currentShard.id === "shard-00-architecture" && (
+                <Text color="yellow"> (required)</Text>
+              )}
             </Box>
-            <Box flexDirection="column" marginBottom={1} paddingX={1}>
-              <Text bold>{currentShard.title}</Text>
-              <Text color="gray">Type: {currentShard.type}</Text>
-              <Text color="gray">ID: {currentShard.id}</Text>
-              <Box marginTop={1}>
-                <Text>Task: {currentShard.task}</Text>
+            
+            <Box flexDirection="column" marginBottom={1} paddingX={1} borderStyle="single" borderColor="gray">
+              <Text bold color="green">{currentShard.title}</Text>
+              <Text color="gray">ID: {currentShard.id} | Type: {currentShard.type}</Text>
+              
+              <Box marginTop={1} flexDirection="column">
+                <Text bold>Context:</Text>
+                <Text color="gray">{currentShard.context}</Text>
               </Box>
+              
+              <Box marginTop={1} flexDirection="column">
+                <Text bold>Task:</Text>
+                <Text>{currentShard.task}</Text>
+              </Box>
+              
               <Box marginTop={1} flexDirection="column">
                 <Text bold>Acceptance Criteria:</Text>
                 {currentShard.acceptanceCriteria.map((c, i) => (
-                  <Text key={i} color="gray">
-                    • {c}
-                  </Text>
+                  <Text key={i} color="gray">• {c}</Text>
                 ))}
               </Box>
+              
+              {currentShard.creates.length > 0 && (
+                <Box marginTop={1} flexDirection="column">
+                  <Text bold>Creates:</Text>
+                  <Text color="blue">{currentShard.creates.join(", ")}</Text>
+                </Box>
+              )}
+              
               {currentShard.dependsOn.length > 0 && (
                 <Box marginTop={1}>
-                  <Text color="yellow">
-                    Depends on: {currentShard.dependsOn.join(", ")}
-                  </Text>
+                  <Text color="yellow">Depends on: {currentShard.dependsOn.join(", ")}</Text>
                 </Box>
               )}
             </Box>
-            <QuestionPrompt
-              question="Approve this shard?"
-              type="confirm"
-              onAnswer={handleShardApproval}
-              onCancel={onBack}
-            />
+            
+            {shardReviewMode === "view" && !editingShardField && (
+              <Menu 
+                items={shardReviewMenuItems} 
+                onSelect={(value) => {
+                  if (value === "approve") {
+                    handleShardApproval("yes");
+                  } else if (value === "edit") {
+                    // Show field selection
+                    setShardReviewMode("edit");
+                  } else if (value === "rescope") {
+                    setShardReviewMode("rescope");
+                  } else if (value === "reject") {
+                    // Don't allow rejecting architecture shard
+                    if (currentShard.id === "shard-00-architecture") {
+                      setError("Cannot remove the architecture shard - it's required");
+                      return;
+                    }
+                    removeShard(currentShardIndex);
+                  } else if (value === "prev") {
+                    setCurrentShardIndex(prev => Math.max(0, prev - 1));
+                  } else if (value === "next") {
+                    setCurrentShardIndex(prev => Math.min(sprintData.shardDrafts.length - 1, prev + 1));
+                  } else if (value === "approve-all") {
+                    // Skip to create board
+                    setStep("create-board");
+                    runCreateBoard();
+                  }
+                }}
+              />
+            )}
+            
+            {shardReviewMode === "edit" && !editingShardField && (
+              <Box flexDirection="column">
+                <Text bold color="cyan">Select field to edit:</Text>
+                <Menu 
+                  items={editableFields} 
+                  onSelect={(value) => {
+                    if (value === "back") {
+                      setShardReviewMode("view");
+                    } else {
+                      setEditingShardField(value);
+                    }
+                  }}
+                />
+              </Box>
+            )}
           </Box>
         );
 
