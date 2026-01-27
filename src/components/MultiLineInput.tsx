@@ -32,6 +32,13 @@ export function MultiLineInput({
   const [cursorPos, setCursorPos] = useState(value.length);
   const { stdout } = useStdout();
   const terminalWidth = stdout?.columns || 80;
+
+  // Keep cursor in bounds when value changes externally
+  useEffect(() => {
+    if (cursorPos > value.length) {
+      setCursorPos(value.length);
+    }
+  }, [value.length, cursorPos]);
   
   // @ mention state
   const [showFilePicker, setShowFilePicker] = useState(false);
@@ -473,12 +480,17 @@ export function MultiLineInput({
   let cursorCol = 0;
   for (let i = 0; i < lines.length; i++) {
     const lineLength = lines[i]?.length || 0;
-    if (charCount + lineLength >= cursorPos) {
+    if (cursorPos <= charCount + lineLength) {
       cursorLine = i;
       cursorCol = cursorPos - charCount;
       break;
     }
     charCount += lineLength + 1; // +1 for newline
+    // Handle cursor at very end of text
+    if (i === lines.length - 1) {
+      cursorLine = i;
+      cursorCol = lineLength;
+    }
   }
 
   // File picker overlay
