@@ -48,6 +48,13 @@ export interface OrcaConfig {
     model: string;
     auto_level: "low" | "medium" | "high";
   };
+  // Design system configuration
+  design?: {
+    // Path to global design templates (colors, typography, components)
+    templates_path: string;
+    // Whether to require UI/UX review for frontend/fullstack shards
+    require_ui_review: boolean;
+  };
   app_url: string;
   branching: {
     pattern: string;

@@ -51,6 +51,10 @@ interface ShardDraft {
   creates: string[];
   dependsOn: string[];
   modifies: string[];
+  // UI/UX design fields
+  needsUiReview?: boolean;        // Auto-detected or manually set
+  uiDesignSpec?: string;          // Generated design specification
+  uiReviewStatus?: "pending" | "reviewed" | "aligned";
 }
 
 interface SprintData {
@@ -94,10 +98,11 @@ export function NewSprint({
   const [prdAnswers, setPrdAnswers] = useState<PrdAnswers | null>(null);
   
   // Shard review state
-  type ShardReviewMode = "view" | "edit" | "rescope";
+  type ShardReviewMode = "view" | "edit" | "rescope" | "ui-design" | "alignment";
   const [shardReviewMode, setShardReviewMode] = useState<ShardReviewMode>("view");
   const [editingShardField, setEditingShardField] = useState<string>("");
   const [rescopePrompt, setRescopePrompt] = useState<string>("");
+  const [designTemplates, setDesignTemplates] = useState<string>("");
 
   // Load existing projects from workspace
   useEffect(() => {
@@ -376,6 +381,236 @@ Return ONLY the JSON object, no other text.`;
         i === shardIndex ? { ...s, [field]: value } : s
       ),
     }));
+  };
+
+  // Load global design templates
+  const loadDesignTemplates = async (): Promise<string> => {
+    if (designTemplates) return designTemplates;
+    
+    const templatesPath = config.design?.templates_path;
+    if (!templatesPath) return "";
+    
+    try {
+      const { readdir, readFile } = await import("fs/promises");
+      const { join } = await import("path");
+      const { homedir } = await import("os");
+      
+      // Expand ~ in path
+      const fullPath = templatesPath.startsWith("~/") 
+        ? join(homedir(), templatesPath.slice(2))
+        : templatesPath;
+      
+      const files = await readdir(fullPath);
+      const contents: string[] = [];
+      
+      for (const file of files) {
+        if (file.endsWith(".md")) {
+          const content = await readFile(join(fullPath, file), "utf-8");
+          contents.push(`## ${file}\n${content}`);
+        }
+      }
+      
+      const templates = contents.join("\n\n---\n\n");
+      setDesignTemplates(templates);
+      return templates;
+    } catch {
+      return "";
+    }
+  };
+
+  // Check if a shard needs UI/UX review
+  const shardNeedsUiReview = (shard: ShardDraft): boolean => {
+    if (shard.needsUiReview !== undefined) return shard.needsUiReview;
+    
+    // Auto-detect based on type and content
+    if (shard.type === "backend" || shard.type === "docs") return false;
+    
+    const uiIndicators = [
+      "component", "page", "screen", "ui", "view", "layout",
+      "form", "button", "modal", "dialog", "panel", "card",
+      ".tsx", "react", "frontend", "interface", "display"
+    ];
+    
+    const content = `${shard.title} ${shard.task} ${shard.creates.join(" ")}`.toLowerCase();
+    return uiIndicators.some(indicator => content.includes(indicator));
+  };
+
+  // Generate UI design spec for a shard using AI
+  const runGenerateUiDesign = async (shardIndex: number) => {
+    setLoading(true);
+    setLoadingMessage("Generating UI/UX design specification...");
+    setError(null);
+
+    const shard = sprintData.shardDrafts[shardIndex];
+    if (!shard) return;
+
+    try {
+      const templates = await loadDesignTemplates();
+      
+      const prompt = `You are a UI/UX designer creating detailed design specifications for a development shard.
+
+## Global Design System
+${templates || "No global design templates configured."}
+
+## Shard to Design
+Title: ${shard.title}
+Task: ${shard.task}
+Context: ${shard.context}
+Creates: ${shard.creates.join(", ")}
+
+## Your Task
+Create a detailed UI/UX specification for this shard that a developer can implement exactly. Include:
+
+1. **Component Structure**: List each component/screen with hierarchy
+2. **Layout**: Exact layout specifications (flexbox/grid, spacing, dimensions)
+3. **Colors**: Specific color values from the design system (or suggest if not defined)
+4. **Typography**: Font sizes, weights, line heights
+5. **States**: All interactive states (hover, focus, active, disabled, loading, error)
+6. **Responsive**: Behavior at different breakpoints
+7. **Interactions**: Animations, transitions, user feedback
+8. **Accessibility**: ARIA labels, keyboard navigation, contrast requirements
+
+Format as markdown that can be included in the shard document.`;
+
+      const result = await invokeDroid(
+        {
+          droid: "technical-analyst",
+          prompt,
+          autoLevel: "low",
+          cwd: selectedProjectPath,
+        },
+        config,
+        (chunk) => setDroidOutput((prev) => prev + chunk)
+      );
+
+      if (!result.success) {
+        throw new Error("Failed to generate UI design spec");
+      }
+
+      // Update shard with design spec
+      setSprintData((prev) => ({
+        ...prev,
+        shardDrafts: prev.shardDrafts.map((s, i) => 
+          i === shardIndex 
+            ? { ...s, uiDesignSpec: result.output, uiReviewStatus: "reviewed" as const }
+            : s
+        ),
+      }));
+      
+      setLoading(false);
+      setShardReviewMode("view");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to generate UI design");
+      setLoading(false);
+    }
+  };
+
+  // Run alignment review to ensure design + functionality are achievable
+  const runAlignmentReview = async (shardIndex: number) => {
+    setLoading(true);
+    setLoadingMessage("Reviewing shard alignment (design + functionality)...");
+    setError(null);
+
+    const shard = sprintData.shardDrafts[shardIndex];
+    if (!shard) return;
+
+    try {
+      const prompt = `You are reviewing a shard for alignment between UI design and functionality.
+
+## Shard Details
+Title: ${shard.title}
+Task: ${shard.task}
+Context: ${shard.context}
+Type: ${shard.type}
+Creates: ${shard.creates.join(", ")}
+Depends On: ${shard.dependsOn.join(", ")}
+
+## Acceptance Criteria
+${shard.acceptanceCriteria.map(c => `- ${c}`).join("\n")}
+
+## UI Design Specification
+${shard.uiDesignSpec || "No UI design spec yet."}
+
+## Your Task
+Review this shard and provide:
+
+1. **Alignment Check**: Are the UI specs and functionality aligned?
+2. **Scope Assessment**: Is this achievable in a single atomic shard?
+3. **Dependencies**: Are all required dependencies listed?
+4. **Gaps**: Any missing acceptance criteria or design details?
+5. **Recommendations**: Suggested adjustments (if any)
+
+If adjustments are needed, provide an updated shard JSON:
+\`\`\`json
+{
+  "title": "...",
+  "task": "...",
+  "acceptanceCriteria": [...],
+  // ... other fields that need updating
+}
+\`\`\`
+
+Otherwise just say "ALIGNED - No changes needed."`;
+
+      const result = await invokeDroid(
+        {
+          droid: "technical-analyst",
+          prompt,
+          autoLevel: "low",
+          cwd: selectedProjectPath,
+        },
+        config,
+        (chunk) => setDroidOutput((prev) => prev + chunk)
+      );
+
+      if (!result.success) {
+        throw new Error("Failed to run alignment review");
+      }
+
+      // Check if changes were suggested
+      const jsonMatch = result.output.match(/```json\s*([\s\S]*?)\s*```/);
+      if (jsonMatch && jsonMatch[1]) {
+        try {
+          const updates = JSON.parse(jsonMatch[1]);
+          // Merge updates into shard
+          setSprintData((prev) => ({
+            ...prev,
+            shardDrafts: prev.shardDrafts.map((s, i) => 
+              i === shardIndex 
+                ? { ...s, ...updates, uiReviewStatus: "aligned" as const }
+                : s
+            ),
+          }));
+        } catch {
+          // JSON parse failed, just mark as aligned
+          setSprintData((prev) => ({
+            ...prev,
+            shardDrafts: prev.shardDrafts.map((s, i) => 
+              i === shardIndex 
+                ? { ...s, uiReviewStatus: "aligned" as const }
+                : s
+            ),
+          }));
+        }
+      } else {
+        // No changes needed
+        setSprintData((prev) => ({
+          ...prev,
+          shardDrafts: prev.shardDrafts.map((s, i) => 
+            i === shardIndex 
+              ? { ...s, uiReviewStatus: "aligned" as const }
+              : s
+          ),
+        }));
+      }
+      
+      setLoading(false);
+      setShardReviewMode("view");
+      setDroidOutput(result.output); // Show the review output
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to run alignment review");
+      setLoading(false);
+    }
   };
 
   // Analyze user-provided requirements for bug/feature/enhancement sprints
@@ -1008,17 +1243,42 @@ ${shard.acceptanceCriteria.map((c) => `- [ ] ${c}`).join("\n")}
         }
 
         // View mode - show shard details with action menu
+        const needsUi = shardNeedsUiReview(currentShard);
+        const hasDesignSpec = !!currentShard.uiDesignSpec;
+        const isAligned = currentShard.uiReviewStatus === "aligned";
+        
         const shardReviewMenuItems: MenuItem[] = [
           { label: "✓ Approve & Next", value: "approve", hint: "Accept this shard and continue" },
           { label: "✎ Edit Field", value: "edit", hint: "Manually edit a specific field" },
           { label: "🔄 AI Rescope", value: "rescope", hint: "Ask AI to modify this shard" },
           { label: "✗ Reject & Remove", value: "reject", hint: "Remove this shard entirely" },
+        ];
+        
+        // Add UI design options if this shard needs UI/UX input
+        if (needsUi && config.design?.templates_path) {
+          shardReviewMenuItems.push(
+            { label: "─────────────", value: "divider-design", disabled: true },
+            { 
+              label: hasDesignSpec ? "🎨 Regenerate UI Design" : "🎨 Generate UI Design", 
+              value: "ui-design", 
+              hint: "Create detailed UI/UX specification" 
+            },
+            { 
+              label: "⚖️ Alignment Review", 
+              value: "alignment", 
+              hint: "Check design + functionality alignment",
+              disabled: !hasDesignSpec
+            }
+          );
+        }
+        
+        shardReviewMenuItems.push(
           { label: "─────────────", value: "divider", disabled: true },
           { label: "← Previous Shard", value: "prev", disabled: currentShardIndex === 0 },
           { label: "→ Skip to Next", value: "next", disabled: currentShardIndex >= sprintData.shardDrafts.length - 1 },
           { label: "─────────────", value: "divider2", disabled: true },
-          { label: "✓✓ Approve All Remaining", value: "approve-all", hint: "Skip review for remaining shards" },
-        ];
+          { label: "✓✓ Approve All Remaining", value: "approve-all", hint: "Skip review for remaining shards" }
+        );
 
         const editableFields: MenuItem[] = [
           { label: "title", value: "title" },
@@ -1076,6 +1336,25 @@ ${shard.acceptanceCriteria.map((c) => `- [ ] ${c}`).join("\n")}
                   <Text color="yellow">Depends on: {currentShard.dependsOn.join(", ")}</Text>
                 </Box>
               )}
+              
+              {needsUi && (
+                <Box marginTop={1}>
+                  <Text color="magenta">
+                    🎨 UI/UX: {
+                      isAligned ? "✓ Aligned" : 
+                      hasDesignSpec ? "Has design spec (not aligned)" : 
+                      "Needs design"
+                    }
+                  </Text>
+                </Box>
+              )}
+              
+              {hasDesignSpec && (
+                <Box marginTop={1} flexDirection="column">
+                  <Text bold color="magenta">UI Design Spec (preview):</Text>
+                  <Text color="gray" dimColor>{currentShard.uiDesignSpec?.slice(0, 200)}...</Text>
+                </Box>
+              )}
             </Box>
             
             {shardReviewMode === "view" && !editingShardField && (
@@ -1096,6 +1375,10 @@ ${shard.acceptanceCriteria.map((c) => `- [ ] ${c}`).join("\n")}
                       return;
                     }
                     removeShard(currentShardIndex);
+                  } else if (value === "ui-design") {
+                    runGenerateUiDesign(currentShardIndex);
+                  } else if (value === "alignment") {
+                    runAlignmentReview(currentShardIndex);
                   } else if (value === "prev") {
                     setCurrentShardIndex(prev => Math.max(0, prev - 1));
                   } else if (value === "next") {
