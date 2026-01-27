@@ -29,6 +29,11 @@ export type ColumnName =
 export interface OrcaConfig {
   project_name: string;
   repo?: string;
+  // Base workspace folder where projects live (e.g., ~/workspace)
+  // Defaults to current directory if not set
+  workspace_root?: string;
+  // Current project path within workspace (can be absolute or relative to workspace_root)
+  project_path?: string;
   tracking: {
     mode: "github" | "local" | "both";
     backlog_board: string;

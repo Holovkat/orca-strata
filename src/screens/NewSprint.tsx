@@ -1,6 +1,8 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import { Box, Text, useInput } from "ink";
+import { join } from "path";
 import { QuestionPrompt } from "../components/QuestionPrompt.js";
+import { Menu, type MenuItem } from "../components/Menu.js";
 import { Spinner } from "../components/Spinner.js";
 import { StatusMessage } from "../components/StatusMessage.js";
 import { invokeDroid } from "../lib/droid.js";
@@ -15,9 +17,11 @@ interface NewSprintProps {
   projectPath: string;
   onBack: () => void;
   onSprintCreated: (status: SprintStatus) => void;
+  onProjectPathChange?: (newPath: string) => void;
 }
 
 type Step =
+  | "select-project"
   | "name"
   | "description"
   | "gather-requirements"
@@ -57,8 +61,9 @@ export function NewSprint({
   projectPath,
   onBack,
   onSprintCreated,
+  onProjectPathChange,
 }: NewSprintProps) {
-  const [step, setStep] = useState<Step>("name");
+  const [step, setStep] = useState<Step>("select-project");
   const [sprintData, setSprintData] = useState<SprintData>({
     name: "",
     description: "",
@@ -73,6 +78,39 @@ export function NewSprint({
   const [requirementIndex, setRequirementIndex] = useState(0);
   const [currentShardIndex, setCurrentShardIndex] = useState(0);
   const [droidOutput, setDroidOutput] = useState<string>("");
+  const [existingProjects, setExistingProjects] = useState<string[]>([]);
+  const [selectedProjectPath, setSelectedProjectPath] = useState<string>(projectPath);
+  const [newProjectName, setNewProjectName] = useState<string>("");
+
+  // Load existing projects from workspace
+  useEffect(() => {
+    const loadProjects = async () => {
+      const projectsDir = config.workspace_root 
+        ? join(config.workspace_root, "projects")
+        : join(projectPath, "projects");
+      
+      try {
+        const { readdir, stat } = await import("fs/promises");
+        const entries = await readdir(projectsDir);
+        const dirs: string[] = [];
+        
+        for (const entry of entries) {
+          const fullPath = join(projectsDir, entry);
+          const stats = await stat(fullPath).catch(() => null);
+          if (stats?.isDirectory() && !entry.startsWith(".")) {
+            dirs.push(entry);
+          }
+        }
+        
+        setExistingProjects(dirs);
+      } catch {
+        // projects folder doesn't exist yet
+        setExistingProjects([]);
+      }
+    };
+    
+    loadProjects();
+  }, [config.workspace_root, projectPath]);
 
   useInput((input, key) => {
     if (key.escape && !loading) {
@@ -125,28 +163,53 @@ ${sprintData.description}
 ${sprintData.requirements.map((r, i) => `${i + 1}. ${r}`).join("\n")}
 
 ## Your Task
-1. Identify any shared patterns, schemas, or components that should be documented in docs/design/
-2. Break these requirements into ATOMIC shards - each shard should be:
+1. FIRST create "shard-00-architecture" - this MUST be the first shard and sets up:
+   - Project structure and folder organization
+   - Dependencies (package.json, etc.)
+   - Shared interfaces/types
+   - Design documents in docs/design/
+   - Any scaffolding needed before implementation
+   
+2. Then break remaining requirements into ATOMIC implementation shards:
    - Small enough for a single droid session
    - Self-contained with clear acceptance criteria
-   - Linked to relevant design docs (not duplicating content)
+   - ALL implementation shards MUST depend on shard-00-architecture
+   - Link to design docs created by architecture shard
+
+## IMPORTANT
+- shard-00-architecture is MANDATORY and must come first
+- All other shards must have "shard-00-architecture" in their dependsOn array
+- Shards should be numbered sequentially: shard-00, shard-01, shard-02, etc.
 
 ## Output Format
 Return a JSON array of shard objects:
 \`\`\`json
 [
   {
+    "id": "shard-00-architecture",
+    "title": "Project Architecture and Setup",
+    "context": "Establishes project foundation before implementation",
+    "task": "Set up project structure, dependencies, interfaces, and design docs",
+    "type": "docs",
+    "requiredReading": [],
+    "newInShard": ["Project structure", "Shared interfaces", "Design documents"],
+    "acceptanceCriteria": ["Project compiles", "All interfaces defined", "Design docs complete"],
+    "creates": ["docs/design/architecture.md", "src/types/index.ts"],
+    "dependsOn": [],
+    "modifies": ["package.json"]
+  },
+  {
     "id": "shard-01-descriptive-name",
     "title": "Short Title",
     "context": "Why this shard exists",
     "task": "Specific task to complete",
     "type": "backend|frontend|fullstack|docs",
-    "requiredReading": [{"label": "Doc Name", "path": "../../docs/design/file.md"}],
+    "requiredReading": [{"label": "Architecture", "path": "../../docs/design/architecture.md"}],
     "newInShard": ["New thing 1", "New thing 2"],
     "acceptanceCriteria": ["Criterion 1", "Criterion 2"],
     "creates": ["path/to/new/file.ts"],
-    "dependsOn": ["shard-id-if-depends"],
-    "modifies": ["path/to/existing/file.ts"]
+    "dependsOn": ["shard-00-architecture"],
+    "modifies": []
   }
 ]
 \`\`\`
@@ -397,8 +460,122 @@ ${shard.acceptanceCriteria.map((c) => `- [ ] ${c}`).join("\n")}
       );
     }
 
+    // Calculate projects directory
+    const projectsDir = config.workspace_root 
+      ? join(config.workspace_root, "projects")
+      : join(projectPath, "projects");
+
     switch (step) {
+      case "select-project":
+        
+        const projectMenuItems: MenuItem[] = [
+          ...existingProjects.map(p => ({
+            label: p,
+            value: `existing:${p}`,
+            hint: "existing project",
+          })),
+          {
+            label: "+ Create New Project",
+            value: "new",
+            hint: "start fresh",
+          },
+          {
+            label: "Use Current Directory",
+            value: "current",
+            hint: projectPath,
+          },
+          {
+            label: "Back",
+            value: "back",
+          },
+        ];
+
+        const handleProjectSelect = async (value: string) => {
+          if (value === "back") {
+            onBack();
+          } else if (value === "current") {
+            setSelectedProjectPath(projectPath);
+            setStep("name");
+          } else if (value === "new") {
+            // Show prompt for new project name
+            setNewProjectName("");
+            setStep("name"); // Will show project name input first
+          } else if (value.startsWith("existing:")) {
+            const projectName = value.replace("existing:", "");
+            const newPath = join(projectsDir, projectName);
+            setSelectedProjectPath(newPath);
+            onProjectPathChange?.(newPath);
+            setStep("name");
+          }
+        };
+
+        return (
+          <Box flexDirection="column">
+            <Text bold color="cyan">Select Project</Text>
+            <Text color="gray" dimColor>Projects folder: {projectsDir}</Text>
+            {existingProjects.length === 0 && (
+              <Text color="yellow" dimColor>No existing projects found</Text>
+            )}
+            <Box marginTop={1}>
+              <Menu items={projectMenuItems} onSelect={handleProjectSelect} />
+            </Box>
+          </Box>
+        );
+
       case "name":
+        // If we're creating a new project, ask for project name first
+        if (step === "name" && !selectedProjectPath.includes("/projects/") && newProjectName === "") {
+          return (
+            <Box flexDirection="column">
+              <Text bold color="cyan">Create New Project</Text>
+              <Text color="gray" dimColor>This will create a new folder in: {projectsDir}</Text>
+              <Box marginTop={1}>
+                <QuestionPrompt
+                  question="Enter new project name (folder name):"
+                  type="text"
+                  onAnswer={async (answer) => {
+                    if (!answer.trim()) {
+                      setError("Project name cannot be empty");
+                      return;
+                    }
+                    const safeName = answer.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
+                    const newPath = join(projectsDir, safeName);
+                    
+                    // Create the project folder and initialize git
+                    setLoading(true);
+                    setLoadingMessage(`Creating project folder: ${safeName}`);
+                    
+                    try {
+                      const { mkdir } = await import("fs/promises");
+                      const { spawn } = await import("child_process");
+                      
+                      await mkdir(newPath, { recursive: true });
+                      
+                      // Initialize git
+                      await new Promise<void>((resolve, reject) => {
+                        const proc = spawn("git", ["init"], { cwd: newPath });
+                        proc.on("close", (code) => code === 0 ? resolve() : reject(new Error("git init failed")));
+                        proc.on("error", reject);
+                      });
+                      
+                      setSelectedProjectPath(newPath);
+                      onProjectPathChange?.(newPath);
+                      setNewProjectName(safeName);
+                      setLoading(false);
+                      // Continue to sprint name
+                    } catch (err) {
+                      setError(err instanceof Error ? err.message : "Failed to create project");
+                      setLoading(false);
+                      return;
+                    }
+                  }}
+                  onCancel={() => setStep("select-project")}
+                />
+              </Box>
+            </Box>
+          );
+        }
+
         return (
           <QuestionPrompt
             question="What is the name of this sprint?"

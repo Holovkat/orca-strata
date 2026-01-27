@@ -24,6 +24,7 @@ export function App({ config, projectPath, configFile }: AppProps) {
   const [screen, setScreen] = useState<Screen>("main");
   const [sprintStatus, setSprintStatus] = useState<SprintStatus | null>(null);
   const [currentConfig, setCurrentConfig] = useState(config);
+  const [currentProjectPath, setCurrentProjectPath] = useState(projectPath);
   const [loading, setLoading] = useState(true);
   const [selectedShard, setSelectedShard] = useState<Shard | null>(null);
   const [chatPrompt, setChatPrompt] = useState<string | undefined>(undefined);
@@ -31,24 +32,29 @@ export function App({ config, projectPath, configFile }: AppProps) {
   // Derive state from sources of truth on startup
   useEffect(() => {
     async function init() {
-      const status = await deriveSprintStatus(projectPath, currentConfig);
+      const status = await deriveSprintStatus(currentProjectPath, currentConfig);
       setSprintStatus(status);
       setLoading(false);
     }
 
     init();
-  }, [projectPath, currentConfig]);
+  }, [currentProjectPath, currentConfig]);
 
   // Handle config changes - save to file
   const handleConfigChange = useCallback(async (newConfig: OrcaConfig) => {
     setCurrentConfig(newConfig);
     try {
-      await saveConfig(projectPath, configFile, newConfig);
+      await saveConfig(currentProjectPath, configFile, newConfig);
     } catch (err) {
       // Config save failed, but we still update in-memory
       console.error("Failed to save config:", err);
     }
-  }, [projectPath, configFile]);
+  }, [currentProjectPath, configFile]);
+
+  // Handle project path change (when creating new project in NewSprint)
+  const handleProjectPathChange = useCallback((newPath: string) => {
+    setCurrentProjectPath(newPath);
+  }, []);
 
   // Handle sprint status changes (runtime only - active droids, etc.)
   const handleSprintStatusChange = useCallback((status: SprintStatus | null) => {
@@ -101,11 +107,11 @@ export function App({ config, projectPath, configFile }: AppProps) {
   const handleRefresh = useCallback(async () => {
     if (sprintStatus) {
       setLoading(true);
-      const refreshed = await refreshStatus(projectPath, currentConfig, sprintStatus);
+      const refreshed = await refreshStatus(currentProjectPath, currentConfig, sprintStatus);
       setSprintStatus(refreshed);
       setLoading(false);
     }
-  }, [projectPath, currentConfig, sprintStatus]);
+  }, [currentProjectPath, currentConfig, sprintStatus]);
 
   if (loading) {
     return (
@@ -128,16 +134,17 @@ export function App({ config, projectPath, configFile }: AppProps) {
         return (
           <NewSprint
             config={currentConfig}
-            projectPath={projectPath}
+            projectPath={currentProjectPath}
             onBack={() => setScreen("main")}
             onSprintCreated={handleSprintCreated}
+            onProjectPathChange={handleProjectPathChange}
           />
         );
       case "continue-sprint":
         return (
           <ContinueSprint
             config={currentConfig}
-            projectPath={projectPath}
+            projectPath={currentProjectPath}
             sprintStatus={sprintStatus}
             onBack={() => setScreen("main")}
             onStatusChange={handleSprintStatusChange}
@@ -148,7 +155,7 @@ export function App({ config, projectPath, configFile }: AppProps) {
         return (
           <ViewStatus
             config={currentConfig}
-            projectPath={projectPath}
+            projectPath={currentProjectPath}
             sprintStatus={sprintStatus}
             onBack={() => setScreen("main")}
             onEditShard={handleEditShard}
@@ -159,7 +166,7 @@ export function App({ config, projectPath, configFile }: AppProps) {
           return (
             <ShardEditor
               config={currentConfig}
-              projectPath={projectPath}
+              projectPath={currentProjectPath}
               shard={selectedShard}
               onBack={() => setScreen("view-status")}
               onShardUpdated={handleShardUpdated}
@@ -171,7 +178,7 @@ export function App({ config, projectPath, configFile }: AppProps) {
         return (
           <DroidChat
             config={currentConfig}
-            projectPath={projectPath}
+            projectPath={currentProjectPath}
             shard={selectedShard || undefined}
             initialPrompt={chatPrompt}
             onBack={() => {
@@ -187,7 +194,7 @@ export function App({ config, projectPath, configFile }: AppProps) {
         return (
           <ManualActions
             config={currentConfig}
-            projectPath={projectPath}
+            projectPath={currentProjectPath}
             onBack={() => setScreen("main")}
             onStartChat={handleStartChatManual}
           />

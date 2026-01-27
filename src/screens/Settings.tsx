@@ -13,7 +13,7 @@ interface SettingsProps {
   onConfigChange: (config: OrcaConfig) => void;
 }
 
-type SubScreen = "menu" | "edit-name" | "edit-model" | "edit-auto" | "edit-app-url";
+type SubScreen = "menu" | "edit-name" | "edit-model" | "edit-auto" | "edit-app-url" | "edit-workspace" | "edit-project-path";
 
 export function Settings({ config, onBack, onConfigChange }: SettingsProps) {
   const [subScreen, setSubScreen] = useState<SubScreen>("menu");
@@ -54,6 +54,16 @@ export function Settings({ config, onBack, onConfigChange }: SettingsProps) {
       label: "Project Name",
       value: "edit-name",
       hint: config.project_name,
+    },
+    {
+      label: "Workspace Root",
+      value: "edit-workspace",
+      hint: config.workspace_root || "(current directory)",
+    },
+    {
+      label: "Project Path",
+      value: "edit-project-path",
+      hint: config.project_path || "(workspace root)",
     },
     {
       label: "Droid Model",
@@ -173,6 +183,46 @@ export function Settings({ config, onBack, onConfigChange }: SettingsProps) {
             onAnswer={(answer) => updateConfig({ app_url: answer })}
             onCancel={() => setSubScreen("menu")}
           />
+        );
+
+      case "edit-workspace":
+        return (
+          <Box flexDirection="column">
+            <Text color="cyan">Workspace Root</Text>
+            <Text color="gray" dimColor>Base folder where all your projects live</Text>
+            <Text color="gray" dimColor>Example: ~/workspace (contains myapp, orca, etc.)</Text>
+            <Box marginTop={1}>
+              <QuestionPrompt
+                question="Enter workspace root path:"
+                type="text"
+                defaultValue={config.workspace_root || ""}
+                onAnswer={(answer) => {
+                  // Expand ~ to home directory
+                  const expanded = answer?.replace(/^~/, process.env.HOME || "~");
+                  updateConfig({ workspace_root: expanded || undefined });
+                }}
+                onCancel={() => setSubScreen("menu")}
+              />
+            </Box>
+          </Box>
+        );
+
+      case "edit-project-path":
+        return (
+          <Box flexDirection="column">
+            <Text color="cyan">Project Path</Text>
+            <Text color="gray" dimColor>Project folder name within workspace root</Text>
+            <Text color="gray" dimColor>Example: my-test-app → {config.workspace_root || "."}/my-test-app</Text>
+            <Box marginTop={1}>
+              <QuestionPrompt
+                question="Enter project folder name:"
+                type="text"
+                defaultValue={config.project_path || ""}
+                onAnswer={(answer) => updateConfig({ project_path: answer || undefined })}
+                onCancel={() => setSubScreen("menu")}
+              />
+            </Box>
+          </Box>
         );
 
       default:
