@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { Box } from "ink";
+import { MouseProvider } from "@zenobius/ink-mouse";
 import { MainMenu } from "./screens/MainMenu.js";
 import { NewSprint } from "./screens/NewSprint.js";
 import { ContinueSprint } from "./screens/ContinueSprint.js";
@@ -36,8 +37,6 @@ export function App({ config, projectPath }: AppProps) {
   // Handle sprint status changes (runtime only - active droids, etc.)
   const handleSprintStatusChange = useCallback((status: SprintStatus | null) => {
     setSprintStatus(status);
-    // Note: We don't persist this - status is derived from GitHub/checklists
-    // Runtime changes (like active droids) are ephemeral
   }, []);
 
   // Handle new sprint creation
@@ -123,12 +122,14 @@ export function App({ config, projectPath }: AppProps) {
   };
 
   return (
-    <Box flexDirection="column" padding={1}>
-      <Header
-        projectName={currentConfig.project_name}
-        sprintStatus={sprintStatus}
-      />
-      {renderScreen()}
-    </Box>
+    <MouseProvider>
+      <Box flexDirection="column" padding={1}>
+        <Header
+          projectName={currentConfig.project_name}
+          sprintStatus={sprintStatus}
+        />
+        {renderScreen()}
+      </Box>
+    </MouseProvider>
   );
 }
