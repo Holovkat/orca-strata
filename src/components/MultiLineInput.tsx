@@ -201,9 +201,22 @@ export function MultiLineInput({
         return;
       }
       
-      // Type to filter
+      // Type to filter (only allow alphanumeric and common chars for filtering)
       if (input && !key.ctrl && !key.meta) {
-        setFileSearchQuery(prev => prev + input);
+        // Backslash or "/" goes to parent directory
+        if (input === "/" || input === "\\") {
+          if (currentDir) {
+            const parts = currentDir.split("/").filter(Boolean);
+            parts.pop();
+            setCurrentDir(parts.join("/"));
+            setFileSearchQuery("");
+          }
+          return;
+        }
+        // Only filter on alphanumeric, dash, underscore, dot
+        if (/^[a-zA-Z0-9._-]$/.test(input)) {
+          setFileSearchQuery(prev => prev + input);
+        }
       }
       return;
     }
@@ -328,11 +341,12 @@ export function MultiLineInput({
         >
           <Box marginBottom={1}>
             <Text bold color="yellow">@ File Reference</Text>
-            <Text color="gray"> - {currentDir || "/"}</Text>
+            <Text color="gray"> (project files)</Text>
           </Box>
           <Box marginBottom={1}>
-            <Text color="cyan">Filter: </Text>
-            <Text>{fileSearchQuery}</Text>
+            <Text color="cyan">Path: </Text>
+            <Text color="blue">{currentDir || "."}/</Text>
+            <Text color="green">{fileSearchQuery}</Text>
             <Text backgroundColor="white" color="black"> </Text>
           </Box>
           {filePickerLoading ? (
@@ -362,7 +376,7 @@ export function MultiLineInput({
         </Box>
         <Box marginTop={0}>
           <Text color="gray" dimColor>
-            ↑↓ navigate • Enter select/open • Tab folder ref • Esc cancel
+            ↑↓ navigate • Enter open • Tab folder ref • / parent • Esc cancel
           </Text>
         </Box>
       </Box>
