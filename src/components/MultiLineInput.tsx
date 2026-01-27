@@ -40,6 +40,7 @@ export function MultiLineInput({
   const [filteredEntries, setFilteredEntries] = useState<FileEntry[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [filePickerLoading, setFilePickerLoading] = useState(false);
+  const [replaceRange, setReplaceRange] = useState<{ start: number; end: number } | null>(null);
 
   // Resolve path with ~ expansion
   const resolvePath = (p: string): string => {
@@ -248,6 +249,7 @@ export function MultiLineInput({
         // First Esc closes file picker, returns to editing
         setShowFilePicker(false);
         setFileSearchQuery("");
+        setReplaceRange(null);
         onFilePickerChange?.(false);
         return;
       }
@@ -273,11 +275,25 @@ export function MultiLineInput({
             // Enter on file (or Ctrl+Enter on folder) = insert reference
             const prefix = selected.type === "folder" ? "@folder:" : "@file:";
             const reference = `${prefix}${selected.path}`;
-            const newValue = value.slice(0, cursorPos) + reference + value.slice(cursorPos);
+            
+            let newValue: string;
+            let newCursorPos: number;
+            
+            if (replaceRange) {
+              // Replace existing reference
+              newValue = value.slice(0, replaceRange.start) + reference + value.slice(replaceRange.end);
+              newCursorPos = replaceRange.start + reference.length;
+            } else {
+              // Insert new reference
+              newValue = value.slice(0, cursorPos) + reference + value.slice(cursorPos);
+              newCursorPos = cursorPos + reference.length;
+            }
+            
             onChange(newValue);
-            setCursorPos(cursorPos + reference.length);
+            setCursorPos(newCursorPos);
             setShowFilePicker(false);
             setFileSearchQuery("");
+            setReplaceRange(null);
             onFilePickerChange?.(false);
           }
         }
@@ -333,8 +349,28 @@ export function MultiLineInput({
 
     // @ triggers file picker
     if (input === "@" && projectPath) {
+      // Check if cursor is inside an existing @file: or @folder: reference
+      // Find the start of any reference before cursor
+      const textBefore = value.slice(0, cursorPos);
+      const refMatch = textBefore.match(/(@(?:file|folder):)([^\s]*)$/);
+      
+      if (refMatch && refMatch[1]) {
+        // Cursor is at end of or inside a reference - find full reference extent
+        const refPrefix = refMatch[1];
+        const refStart = textBefore.lastIndexOf(refPrefix);
+        const textAfter = value.slice(cursorPos);
+        const refEndMatch = textAfter.match(/^[^\s]*/);
+        const refEnd = cursorPos + (refEndMatch ? refEndMatch[0].length : 0);
+        
+        // Store the range to replace when a new file is selected
+        setReplaceRange({ start: refStart, end: refEnd });
+        setFileSearchQuery((refMatch[2] || "") + (refEndMatch ? refEndMatch[0] : "")); // Pre-fill with current path
+      } else {
+        setReplaceRange(null);
+        setFileSearchQuery("");
+      }
+      
       setShowFilePicker(true);
-      setFileSearchQuery("");
       onFilePickerChange?.(true);
       return;
     }
