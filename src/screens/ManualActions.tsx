@@ -337,8 +337,7 @@ ${prompt}`;
       <Box marginTop={1}>
         <QuestionPrompt
           question="Enter your prompt for the droid:"
-          type="multiline"
-          rows={8}
+          type="text"
           onAnswer={(prompt) => {
             if (selectedMode === "chat") {
               startChatSession(prompt);

@@ -36,10 +36,8 @@
     "typescript": "^5"
   },
   "dependencies": {
-    "@zenobius/ink-mouse": "^1.0.3",
     "commander": "^14.0.2",
     "ink": "^6.6.0",
-    "ink-multiline-input": "^0.1.0",
     "ink-select-input": "^6.2.0",
     "ink-spinner": "^5.0.0",
     "ink-table": "^3.1.0",

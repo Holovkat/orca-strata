@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { Box } from "ink";
-import { MouseProvider } from "@zenobius/ink-mouse";
 import { MainMenu } from "./screens/MainMenu.js";
 import { NewSprint } from "./screens/NewSprint.js";
 import { ContinueSprint } from "./screens/ContinueSprint.js";
@@ -194,14 +193,12 @@ export function App({ config, projectPath }: AppProps) {
   };
 
   return (
-    <MouseProvider>
-      <Box flexDirection="column" padding={1}>
-        <Header
-          projectName={currentConfig.project_name}
-          sprintStatus={sprintStatus}
-        />
-        {renderScreen()}
-      </Box>
-    </MouseProvider>
+    <Box flexDirection="column" padding={1}>
+      <Header
+        projectName={currentConfig.project_name}
+        sprintStatus={sprintStatus}
+      />
+      {renderScreen()}
+    </Box>
   );
 }

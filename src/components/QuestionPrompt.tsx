@@ -2,14 +2,12 @@ import React, { useState } from "react";
 import { Box, Text, useInput } from "ink";
 import TextInput from "ink-text-input";
 import SelectInput from "ink-select-input";
-import { MultilineInput } from "ink-multiline-input";
 
 interface QuestionPromptProps {
   question: string;
-  type: "text" | "multiline" | "select" | "confirm";
+  type: "text" | "select" | "confirm";
   options?: string[];
   defaultValue?: string;
-  rows?: number;
   onAnswer: (answer: string) => void;
   onCancel?: () => void;
 }
@@ -19,7 +17,6 @@ export function QuestionPrompt({
   type,
   options = [],
   defaultValue = "",
-  rows = 10,
   onAnswer,
   onCancel,
 }: QuestionPromptProps) {
@@ -75,38 +72,6 @@ export function QuestionPrompt({
             </Text>
           )}
         />
-      </Box>
-    );
-  }
-
-  // Multiline text input
-  if (type === "multiline") {
-    return (
-      <Box flexDirection="column">
-        <Box marginBottom={1}>
-          <Text bold color="yellow">
-            ? {question}
-          </Text>
-        </Box>
-        <Box
-          borderStyle="single"
-          borderColor="cyan"
-          paddingX={1}
-          flexDirection="column"
-        >
-          <MultilineInput
-            value={value}
-            onChange={setValue}
-            onSubmit={onAnswer}
-            rows={rows}
-            placeholder={defaultValue || "Type your answer (multiple lines)..."}
-            focus={true}
-            showCursor={true}
-          />
-        </Box>
-        <Box marginTop={1}>
-          <Text color="gray">Ctrl+Enter to submit • Esc to cancel • Arrow keys to navigate</Text>
-        </Box>
       </Box>
     );
   }
