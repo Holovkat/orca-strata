@@ -8,6 +8,7 @@ import { ViewStatus } from "./screens/ViewStatus.js";
 import { ManualActions } from "./screens/ManualActions.js";
 import { Settings } from "./screens/Settings.js";
 import { ShardEditor } from "./screens/ShardEditor.js";
+import { DroidChat } from "./screens/DroidChat.js";
 import { Header } from "./components/Header.js";
 import { Spinner } from "./components/Spinner.js";
 import { deriveSprintStatus, refreshStatus } from "./lib/state.js";
@@ -24,6 +25,7 @@ export function App({ config, projectPath }: AppProps) {
   const [currentConfig, setCurrentConfig] = useState(config);
   const [loading, setLoading] = useState(true);
   const [selectedShard, setSelectedShard] = useState<Shard | null>(null);
+  const [chatPrompt, setChatPrompt] = useState<string | undefined>(undefined);
 
   // Derive state from sources of truth on startup
   useEffect(() => {
@@ -51,6 +53,13 @@ export function App({ config, projectPath }: AppProps) {
   const handleEditShard = useCallback((shard: Shard) => {
     setSelectedShard(shard);
     setScreen("shard-editor");
+  }, []);
+
+  // Handle starting a droid chat for a shard
+  const handleStartChat = useCallback((shard: Shard, prompt?: string) => {
+    setSelectedShard(shard);
+    setChatPrompt(prompt);
+    setScreen("droid-chat");
   }, []);
 
   // Handle shard update
@@ -113,6 +122,7 @@ export function App({ config, projectPath }: AppProps) {
             sprintStatus={sprintStatus}
             onBack={() => setScreen("main")}
             onStatusChange={handleSprintStatusChange}
+            onStartChat={handleStartChat}
           />
         );
       case "view-status":
@@ -138,6 +148,22 @@ export function App({ config, projectPath }: AppProps) {
           );
         }
         return <MainMenu onSelect={setScreen} sprintStatus={sprintStatus} />;
+      case "droid-chat":
+        return (
+          <DroidChat
+            config={currentConfig}
+            projectPath={projectPath}
+            shard={selectedShard || undefined}
+            initialPrompt={chatPrompt}
+            onBack={() => {
+              setChatPrompt(undefined);
+              setScreen(selectedShard ? "continue-sprint" : "main");
+            }}
+            onComplete={(success) => {
+              // Could update shard status here if needed
+            }}
+          />
+        );
       case "manual-actions":
         return (
           <ManualActions

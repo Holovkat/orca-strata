@@ -5,7 +5,8 @@ export type Screen =
   | "view-status"
   | "manual-actions"
   | "settings"
-  | "shard-editor";
+  | "shard-editor"
+  | "droid-chat";
 
 export type Phase =
   | "planning"
