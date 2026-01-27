@@ -5,11 +5,13 @@ import { QuestionPrompt } from "../components/QuestionPrompt.js";
 import { Menu, type MenuItem } from "../components/Menu.js";
 import { Spinner } from "../components/Spinner.js";
 import { StatusMessage } from "../components/StatusMessage.js";
+import { PrdQA, type PrdAnswers } from "../components/PrdQA.js";
 import { invokeDroid } from "../lib/droid.js";
 import { createProject, createIssue, addIssueToProject } from "../lib/github.js";
 import { createStackedBranch, getCurrentBranch } from "../lib/git.js";
 import { createShard, shardToIssueBody, type ParsedShard } from "../lib/shard.js";
 import { buildDependencyGraph } from "../lib/dependencies.js";
+import { scaffoldProject, hasPrd, updatePrdFromAnswers } from "../lib/scaffold.js";
 import type { OrcaConfig, SprintStatus, Sprint, Phase, Shard } from "../lib/types.js";
 
 interface NewSprintProps {
@@ -22,6 +24,8 @@ interface NewSprintProps {
 
 type Step =
   | "select-project"
+  | "create-project"
+  | "prd-qa"
   | "name"
   | "description"
   | "gather-requirements"
@@ -81,6 +85,8 @@ export function NewSprint({
   const [existingProjects, setExistingProjects] = useState<string[]>([]);
   const [selectedProjectPath, setSelectedProjectPath] = useState<string>(projectPath);
   const [newProjectName, setNewProjectName] = useState<string>("");
+  const [projectHasPrd, setProjectHasPrd] = useState<boolean>(false);
+  const [prdAnswers, setPrdAnswers] = useState<PrdAnswers | null>(null);
 
   // Load existing projects from workspace
   useEffect(() => {
@@ -495,17 +501,23 @@ ${shard.acceptanceCriteria.map((c) => `- [ ] ${c}`).join("\n")}
             onBack();
           } else if (value === "current") {
             setSelectedProjectPath(projectPath);
-            setStep("name");
+            // Check if current project has PRD
+            const hasPrdResult = await hasPrd(projectPath);
+            setProjectHasPrd(hasPrdResult);
+            setStep(hasPrdResult ? "name" : "prd-qa");
           } else if (value === "new") {
             // Show prompt for new project name
             setNewProjectName("");
-            setStep("name"); // Will show project name input first
+            setStep("create-project");
           } else if (value.startsWith("existing:")) {
             const projectName = value.replace("existing:", "");
             const newPath = join(projectsDir, projectName);
             setSelectedProjectPath(newPath);
             onProjectPathChange?.(newPath);
-            setStep("name");
+            // Check if project has PRD
+            const hasPrdResult = await hasPrd(newPath);
+            setProjectHasPrd(hasPrdResult);
+            setStep(hasPrdResult ? "name" : "prd-qa");
           }
         };
 
@@ -522,60 +534,72 @@ ${shard.acceptanceCriteria.map((c) => `- [ ] ${c}`).join("\n")}
           </Box>
         );
 
-      case "name":
-        // If we're creating a new project, ask for project name first
-        if (step === "name" && !selectedProjectPath.includes("/projects/") && newProjectName === "") {
-          return (
-            <Box flexDirection="column">
-              <Text bold color="cyan">Create New Project</Text>
-              <Text color="gray" dimColor>This will create a new folder in: {projectsDir}</Text>
-              <Box marginTop={1}>
-                <QuestionPrompt
-                  question="Enter new project name (folder name):"
-                  type="text"
-                  onAnswer={async (answer) => {
-                    if (!answer.trim()) {
-                      setError("Project name cannot be empty");
-                      return;
-                    }
-                    const safeName = answer.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
-                    const newPath = join(projectsDir, safeName);
-                    
-                    // Create the project folder and initialize git
-                    setLoading(true);
-                    setLoadingMessage(`Creating project folder: ${safeName}`);
-                    
-                    try {
-                      const { mkdir } = await import("fs/promises");
-                      const { spawn } = await import("child_process");
-                      
-                      await mkdir(newPath, { recursive: true });
-                      
-                      // Initialize git
-                      await new Promise<void>((resolve, reject) => {
-                        const proc = spawn("git", ["init"], { cwd: newPath });
-                        proc.on("close", (code) => code === 0 ? resolve() : reject(new Error("git init failed")));
-                        proc.on("error", reject);
-                      });
-                      
-                      setSelectedProjectPath(newPath);
-                      onProjectPathChange?.(newPath);
-                      setNewProjectName(safeName);
-                      setLoading(false);
-                      // Continue to sprint name
-                    } catch (err) {
-                      setError(err instanceof Error ? err.message : "Failed to create project");
-                      setLoading(false);
-                      return;
-                    }
-                  }}
-                  onCancel={() => setStep("select-project")}
-                />
-              </Box>
+      case "create-project":
+        return (
+          <Box flexDirection="column">
+            <Text bold color="cyan">Create New Project</Text>
+            <Text color="gray" dimColor>This will create a new folder in: {projectsDir}</Text>
+            <Box marginTop={1}>
+              <QuestionPrompt
+                question="Enter new project name (folder name):"
+                type="text"
+                onAnswer={async (answer) => {
+                  if (!answer.trim()) {
+                    setError("Project name cannot be empty");
+                    return;
+                  }
+                  const safeName = answer.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
+                  const newPath = join(projectsDir, safeName);
+                  
+                  setLoading(true);
+                  setLoadingMessage(`Creating project: ${safeName}`);
+                  
+                  const result = await scaffoldProject(newPath, safeName);
+                  
+                  if (!result.success) {
+                    setError(result.error || "Failed to create project");
+                    setLoading(false);
+                    return;
+                  }
+                  
+                  setSelectedProjectPath(newPath);
+                  onProjectPathChange?.(newPath);
+                  setNewProjectName(safeName);
+                  setLoading(false);
+                  // New projects always need PRD Q&A
+                  setStep("prd-qa");
+                }}
+                onCancel={() => setStep("select-project")}
+              />
             </Box>
-          );
-        }
+          </Box>
+        );
 
+      case "prd-qa":
+        return (
+          <PrdQA
+            projectName={newProjectName || selectedProjectPath.split("/").pop() || "Project"}
+            initialAnswers={prdAnswers || undefined}
+            onComplete={async (answers) => {
+              setPrdAnswers(answers);
+              setLoading(true);
+              setLoadingMessage("Saving PRD...");
+              
+              try {
+                await updatePrdFromAnswers(selectedProjectPath, answers);
+                setProjectHasPrd(true);
+                setLoading(false);
+                setStep("name");
+              } catch (err) {
+                setError(err instanceof Error ? err.message : "Failed to save PRD");
+                setLoading(false);
+              }
+            }}
+            onCancel={() => setStep("select-project")}
+          />
+        );
+
+      case "name":
         return (
           <QuestionPrompt
             question="What is the name of this sprint?"
