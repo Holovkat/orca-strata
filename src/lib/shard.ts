@@ -1,6 +1,40 @@
 import { readFile, writeFile, mkdir } from "fs/promises";
-import { join, dirname } from "path";
+import { join, dirname, relative, isAbsolute } from "path";
+import { homedir } from "os";
 import type { Shard, ColumnName } from "./types.js";
+
+// Convert a path to a proper markdown-compatible link path
+// Expands ~ to home directory and makes paths relative or uses file:// protocol
+function toMarkdownLinkPath(path: string, fromDir: string): string {
+  let resolvedPath = path;
+  
+  // Expand ~ to home directory
+  if (resolvedPath.startsWith("~/")) {
+    resolvedPath = join(homedir(), resolvedPath.slice(2));
+  }
+  
+  // Handle @file: and @folder: prefixes
+  if (resolvedPath.startsWith("@file:") || resolvedPath.startsWith("@folder:")) {
+    resolvedPath = resolvedPath.replace(/^@(file|folder):/, "");
+    // Expand ~ again if present after prefix
+    if (resolvedPath.startsWith("~/")) {
+      resolvedPath = join(homedir(), resolvedPath.slice(2));
+    }
+  }
+  
+  // If it's an absolute path, try to make it relative to fromDir
+  if (isAbsolute(resolvedPath)) {
+    const relativePath = relative(fromDir, resolvedPath);
+    // If relative path doesn't go too far up, use it
+    if (!relativePath.startsWith("../../../")) {
+      return relativePath;
+    }
+    // Otherwise use file:// URL for absolute path
+    return `file://${resolvedPath}`;
+  }
+  
+  return resolvedPath;
+}
 
 export interface ShardMetadata {
   title: string;
@@ -246,8 +280,12 @@ export async function createShard(
   // Ensure directory exists
   await mkdir(dirPath, { recursive: true });
   
+  // Convert paths in requiredReading to proper markdown-compatible links
   const requiredReadingStr = data.requiredReading
-    .map((r) => `- [${r.label}](${r.path})`)
+    .map((r) => {
+      const linkPath = toMarkdownLinkPath(r.path, dirPath);
+      return `- [${r.label}](${linkPath})`;
+    })
     .join("\n");
     
   const newInShardStr = data.newInShard.map((n) => `- ${n}`).join("\n");
