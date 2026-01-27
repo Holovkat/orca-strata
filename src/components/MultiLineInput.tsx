@@ -34,83 +34,72 @@ export function MultiLineInput({
   // @ mention state
   const [showFilePicker, setShowFilePicker] = useState(false);
   const [fileSearchQuery, setFileSearchQuery] = useState("");
-  const [fileEntries, setFileEntries] = useState<FileEntry[]>([]);
+  const [allEntries, setAllEntries] = useState<FileEntry[]>([]);
   const [filteredEntries, setFilteredEntries] = useState<FileEntry[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [currentDir, setCurrentDir] = useState("");
   const [filePickerLoading, setFilePickerLoading] = useState(false);
-  const [filePickerError, setFilePickerError] = useState("");
 
-  // Load files when file picker is shown
+  // Load all files recursively when file picker is shown
   useEffect(() => {
     if (!showFilePicker || !projectPath) return;
+    if (allEntries.length > 0) return; // Already loaded
     
     let cancelled = false;
     
     const loadFiles = async () => {
       setFilePickerLoading(true);
-      setFilePickerError("");
       
       try {
         const { readdir, stat } = await import("fs/promises");
-        const targetDir = currentDir ? join(projectPath, currentDir) : projectPath;
-        const entries = await readdir(targetDir);
-        
-        if (cancelled) return;
-        
         const fileList: FileEntry[] = [];
+        const maxEntries = 500;
         
-        // Add parent directory option if not at root
-        if (currentDir) {
-          fileList.push({
-            name: "..",
-            path: join(currentDir, ".."),
-            type: "folder",
-          });
-        }
+        const ignoreDirs = new Set(["node_modules", ".git", "dist", "build", ".next", "coverage", "__pycache__", ".venv", "venv"]);
         
-        // Limit entries to prevent freezing on large directories
-        const maxEntries = 100;
-        let count = 0;
-        
-        for (const entry of entries) {
-          if (count >= maxEntries) break;
-          if (entry.startsWith(".") && entry !== "..") continue; // Skip hidden files
+        const scanDir = async (dir: string, relativePath: string) => {
+          if (cancelled || fileList.length >= maxEntries) return;
           
-          const fullPath = join(targetDir, entry);
-          const stats = await stat(fullPath).catch(() => null);
-          
-          if (cancelled) return;
-          
-          if (stats) {
-            fileList.push({
-              name: entry,
-              path: currentDir ? join(currentDir, entry) : entry,
-              type: stats.isDirectory() ? "folder" : "file",
-            });
-            count++;
+          try {
+            const entries = await readdir(dir);
+            
+            for (const entry of entries) {
+              if (cancelled || fileList.length >= maxEntries) break;
+              if (entry.startsWith(".")) continue;
+              
+              const fullPath = join(dir, entry);
+              const relPath = relativePath ? `${relativePath}/${entry}` : entry;
+              const stats = await stat(fullPath).catch(() => null);
+              
+              if (stats) {
+                if (stats.isDirectory()) {
+                  if (!ignoreDirs.has(entry)) {
+                    fileList.push({ name: entry, path: relPath, type: "folder" });
+                    await scanDir(fullPath, relPath);
+                  }
+                } else {
+                  fileList.push({ name: entry, path: relPath, type: "file" });
+                }
+              }
+            }
+          } catch {
+            // Ignore permission errors
           }
-        }
+        };
         
-        // Sort: folders first, then files
-        fileList.sort((a, b) => {
-          if (a.name === "..") return -1;
-          if (b.name === "..") return 1;
-          if (a.type !== b.type) return a.type === "folder" ? -1 : 1;
-          return a.name.localeCompare(b.name);
-        });
+        await scanDir(projectPath, "");
         
         if (!cancelled) {
-          setFileEntries(fileList);
-          setFilteredEntries(fileList);
+          // Sort alphabetically
+          fileList.sort((a, b) => a.path.localeCompare(b.path));
+          setAllEntries(fileList);
+          setFilteredEntries(fileList.slice(0, 20));
           setSelectedIndex(0);
           setFilePickerLoading(false);
         }
-      } catch (err) {
+      } catch {
         if (!cancelled) {
-          setFileEntries([]);
+          setAllEntries([]);
           setFilteredEntries([]);
-          setFilePickerError(err instanceof Error ? err.message : "Failed to load files");
           setFilePickerLoading(false);
         }
       }
@@ -119,20 +108,22 @@ export function MultiLineInput({
     loadFiles();
     
     return () => { cancelled = true; };
-  }, [showFilePicker, projectPath, currentDir]);
+  }, [showFilePicker, projectPath, allEntries.length]);
 
-  // Filter entries based on search query
+  // Filter entries based on search query (fuzzy match on path)
   useEffect(() => {
     if (!fileSearchQuery) {
-      setFilteredEntries(fileEntries);
+      setFilteredEntries(allEntries.slice(0, 20));
     } else {
       const query = fileSearchQuery.toLowerCase();
-      setFilteredEntries(
-        fileEntries.filter(e => e.name.toLowerCase().includes(query))
+      const matches = allEntries.filter(e => 
+        e.path.toLowerCase().includes(query) || 
+        e.name.toLowerCase().includes(query)
       );
+      setFilteredEntries(matches.slice(0, 20));
     }
     setSelectedIndex(0);
-  }, [fileSearchQuery, fileEntries]);
+  }, [fileSearchQuery, allEntries]);
 
   useInput((input, key) => {
     // File picker mode
@@ -140,7 +131,6 @@ export function MultiLineInput({
       if (key.escape) {
         setShowFilePicker(false);
         setFileSearchQuery("");
-        setCurrentDir("");
         return;
       }
       
@@ -157,26 +147,14 @@ export function MultiLineInput({
       if (key.return) {
         const selected = filteredEntries[selectedIndex];
         if (selected) {
-          if (selected.type === "folder") {
-            // Navigate into folder
-            if (selected.name === "..") {
-              const parts = currentDir.split("/").filter(Boolean);
-              parts.pop();
-              setCurrentDir(parts.join("/"));
-            } else {
-              setCurrentDir(selected.path);
-            }
-            setFileSearchQuery("");
-          } else {
-            // Insert file reference
-            const reference = `@file:${selected.path}`;
-            const newValue = value.slice(0, cursorPos) + reference + value.slice(cursorPos);
-            onChange(newValue);
-            setCursorPos(cursorPos + reference.length);
-            setShowFilePicker(false);
-            setFileSearchQuery("");
-            setCurrentDir("");
-          }
+          // Insert reference
+          const prefix = selected.type === "folder" ? "@folder:" : "@file:";
+          const reference = `${prefix}${selected.path}`;
+          const newValue = value.slice(0, cursorPos) + reference + value.slice(cursorPos);
+          onChange(newValue);
+          setCursorPos(cursorPos + reference.length);
+          setShowFilePicker(false);
+          setFileSearchQuery("");
         }
         return;
       }
@@ -186,37 +164,9 @@ export function MultiLineInput({
         return;
       }
       
-      // Tab to insert folder reference
-      if (key.tab) {
-        const selected = filteredEntries[selectedIndex];
-        if (selected && selected.type === "folder" && selected.name !== "..") {
-          const reference = `@folder:${selected.path}/`;
-          const newValue = value.slice(0, cursorPos) + reference + value.slice(cursorPos);
-          onChange(newValue);
-          setCursorPos(cursorPos + reference.length);
-          setShowFilePicker(false);
-          setFileSearchQuery("");
-          setCurrentDir("");
-        }
-        return;
-      }
-      
-      // Type to filter (only allow alphanumeric and common chars for filtering)
+      // Type to filter
       if (input && !key.ctrl && !key.meta) {
-        // Backslash or "/" goes to parent directory
-        if (input === "/" || input === "\\") {
-          if (currentDir) {
-            const parts = currentDir.split("/").filter(Boolean);
-            parts.pop();
-            setCurrentDir(parts.join("/"));
-            setFileSearchQuery("");
-          }
-          return;
-        }
-        // Only filter on alphanumeric, dash, underscore, dot
-        if (/^[a-zA-Z0-9._-]$/.test(input)) {
-          setFileSearchQuery(prev => prev + input);
-        }
+        setFileSearchQuery(prev => prev + input);
       }
       return;
     }
@@ -247,7 +197,6 @@ export function MultiLineInput({
     if (input === "@" && projectPath) {
       setShowFilePicker(true);
       setFileSearchQuery("");
-      setCurrentDir("");
       return;
     }
 
@@ -341,18 +290,16 @@ export function MultiLineInput({
         >
           <Box marginBottom={1}>
             <Text bold color="yellow">@ File Reference</Text>
-            <Text color="gray"> (project files)</Text>
+            <Text color="gray"> - type to search</Text>
           </Box>
           <Box marginBottom={1}>
-            <Text color="cyan">Path: </Text>
-            <Text color="blue">{currentDir || "."}/</Text>
+            <Text color="cyan">Search: </Text>
             <Text color="green">{fileSearchQuery}</Text>
             <Text backgroundColor="white" color="black"> </Text>
+            {fileSearchQuery && <Text color="gray"> ({filteredEntries.length} matches)</Text>}
           </Box>
           {filePickerLoading ? (
-            <Text color="yellow">Loading...</Text>
-          ) : filePickerError ? (
-            <Text color="red">{filePickerError}</Text>
+            <Text color="yellow">Scanning project files...</Text>
           ) : visibleEntries.length === 0 ? (
             <Text color="gray" dimColor>No files found</Text>
           ) : (
@@ -367,7 +314,7 @@ export function MultiLineInput({
                   </Text>
                   <Text>{icon} </Text>
                   <Text color={isSelected ? "cyan" : entry.type === "folder" ? "blue" : "white"}>
-                    {entry.name}
+                    {entry.path}
                   </Text>
                 </Text>
               );
@@ -376,7 +323,7 @@ export function MultiLineInput({
         </Box>
         <Box marginTop={0}>
           <Text color="gray" dimColor>
-            ↑↓ navigate • Enter open • Tab folder ref • / parent • Esc cancel
+            ↑↓ navigate • Enter select • Esc cancel
           </Text>
         </Box>
       </Box>
