@@ -253,8 +253,9 @@ export function ContinueSprint({
         <Box flexDirection="column">
           <Spinner message={loadingMessage} />
           {droidOutput && (
-            <Box marginTop={1}>
-              <Text color="gray">{droidOutput.slice(-300)}</Text>
+            <Box marginTop={1} flexDirection="column">
+              <Text color="yellow">--- Droid Output ---</Text>
+              <Text color="white" wrap="wrap">{droidOutput.slice(-1000)}</Text>
             </Box>
           )}
         </Box>

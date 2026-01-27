@@ -1,0 +1,24 @@
+project_name: Unnamed Project
+tracking:
+  mode: github
+  backlog_board: Backlog
+columns:
+  - Ready to Build
+  - In Progress
+  - Ready for Review
+  - In Review
+  - Ready for UAT
+  - UAT in Progress
+  - User Acceptance
+  - Done
+paths:
+  features: features/
+  docs: docs/design/
+  worktrees: .worktrees/
+droids:
+  model: custom:opus-[Claude]-8
+  auto_level: medium
+app_url: http://localhost:3000
+branching:
+  pattern: feature/{sprint}-{shard}
+  stack_from: previous
