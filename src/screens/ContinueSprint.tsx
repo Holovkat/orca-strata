@@ -23,6 +23,7 @@ interface ContinueSprintProps {
   sprintStatus: SprintStatus | null;
   onBack: () => void;
   onStatusChange: (status: SprintStatus) => void;
+  onStartChat?: (shard: Shard, prompt?: string) => void;
 }
 
 type SubScreen = "menu" | "build" | "review" | "uat" | "user-acceptance" | "deploy";
@@ -33,6 +34,7 @@ export function ContinueSprint({
   sprintStatus,
   onBack,
   onStatusChange,
+  onStartChat,
 }: ContinueSprintProps) {
   const [subScreen, setSubScreen] = useState<SubScreen>("menu");
   const [loading, setLoading] = useState(false);
@@ -178,6 +180,7 @@ export function ContinueSprint({
             setLoadingMessage={setLoadingMessage}
             setMessage={setMessage}
             appendDroidOutput={appendDroidOutput}
+            onStartChat={onStartChat}
           />
         );
       case "review":
@@ -293,6 +296,7 @@ interface PhaseProps {
   setLoadingMessage: (msg: string) => void;
   setMessage: (msg: { type: "success" | "error" | "info"; text: string } | null) => void;
   appendDroidOutput?: (chunk: string) => void;
+  onStartChat?: (shard: Shard, prompt?: string) => void;
 }
 
 function BuildPhase({
@@ -305,6 +309,7 @@ function BuildPhase({
   setLoadingMessage,
   setMessage,
   appendDroidOutput,
+  onStartChat,
 }: PhaseProps) {
   const graph = buildDependencyGraph(sprintStatus.sprint.shards);
   const completedIds = new Set(
@@ -426,16 +431,23 @@ Begin implementation.`;
 
   const menuItems: MenuItem[] = [
     {
-      label: "Start All Ready Shards",
+      label: "Start All Ready Shards (Auto)",
       value: "start-all",
       hint: `${readyShardObjects.length} shards ready`,
       disabled: readyShardObjects.length === 0,
     },
-    ...readyShardObjects.map((shard) => ({
-      label: `Start: ${shard.title}`,
-      value: `start-${shard.id}`,
-      hint: shard.type,
-    })),
+    ...readyShardObjects.flatMap((shard) => [
+      {
+        label: `Auto: ${shard.title}`,
+        value: `start-${shard.id}`,
+        hint: `${shard.type} - headless`,
+      },
+      {
+        label: `Chat: ${shard.title}`,
+        value: `chat-${shard.id}`,
+        hint: `${shard.type} - interactive`,
+      },
+    ]),
     {
       label: "View Active Droids",
       value: "view-droids",
@@ -454,6 +466,25 @@ Begin implementation.`;
       // Start shards sequentially for now
       for (const shard of readyShardObjects) {
         await startShard(shard);
+      }
+    } else if (value.startsWith("chat-")) {
+      const shardId = value.replace("chat-", "");
+      const shard = sprintStatus.sprint.shards.find((s) => s.id === shardId);
+      if (shard && onStartChat) {
+        // Generate initial prompt for the chat
+        const shardContent = await readShard(join(projectPath, shard.file));
+        const prompt = `I'm working on shard: ${shard.title}
+
+Please read the shard file at ${shard.file} and help me implement it.
+
+## Task
+${shardContent?.task || "See shard file for details."}
+
+## Acceptance Criteria
+${shardContent?.acceptanceCriteria.map((c) => `- ${c}`).join("\n") || "See shard file"}
+
+Let's start by reviewing the requirements and then implementing step by step.`;
+        onStartChat(shard, prompt);
       }
     } else if (value.startsWith("start-")) {
       const shardId = value.replace("start-", "");
