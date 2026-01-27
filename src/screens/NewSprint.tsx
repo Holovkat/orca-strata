@@ -579,6 +579,7 @@ ${shard.acceptanceCriteria.map((c) => `- [ ] ${c}`).join("\n")}
         return (
           <PrdQA
             projectName={newProjectName || selectedProjectPath.split("/").pop() || "Project"}
+            projectPath={selectedProjectPath}
             initialAnswers={prdAnswers || undefined}
             onComplete={async (answers) => {
               setPrdAnswers(answers);
