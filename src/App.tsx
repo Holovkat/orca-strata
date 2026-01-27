@@ -62,6 +62,13 @@ export function App({ config, projectPath }: AppProps) {
     setScreen("droid-chat");
   }, []);
 
+  // Handle starting a droid chat without a shard (from manual actions)
+  const handleStartChatManual = useCallback((prompt: string) => {
+    setSelectedShard(null);
+    setChatPrompt(prompt);
+    setScreen("droid-chat");
+  }, []);
+
   // Handle shard update
   const handleShardUpdated = useCallback((updatedShard: Shard) => {
     if (sprintStatus) {
@@ -170,6 +177,7 @@ export function App({ config, projectPath }: AppProps) {
             config={currentConfig}
             projectPath={projectPath}
             onBack={() => setScreen("main")}
+            onStartChat={handleStartChatManual}
           />
         );
       case "settings":

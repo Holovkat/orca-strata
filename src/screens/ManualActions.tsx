@@ -7,12 +7,10 @@ import { StatusMessage } from "../components/StatusMessage.js";
 import { invokeDroid, listAvailableDroids } from "../lib/droid.js";
 import {
   listWorktrees,
-  createWorktreeWithNewBranch,
   removeWorktree,
   pruneWorktrees,
   getCurrentBranch,
   listBranches,
-  createStackedBranch,
   rebaseStack,
   push,
 } from "../lib/git.js";
@@ -22,6 +20,7 @@ interface ManualActionsProps {
   config: OrcaConfig;
   projectPath: string;
   onBack: () => void;
+  onStartChat?: (prompt: string) => void;
 }
 
 type SubScreen =
@@ -31,7 +30,7 @@ type SubScreen =
   | "manage-worktrees"
   | "git-operations";
 
-export function ManualActions({ config, projectPath, onBack }: ManualActionsProps) {
+export function ManualActions({ config, projectPath, onBack, onStartChat }: ManualActionsProps) {
   const [subScreen, setSubScreen] = useState<SubScreen>("menu");
   const [loading, setLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState("");
@@ -100,6 +99,7 @@ export function ManualActions({ config, projectPath, onBack }: ManualActionsProp
             setMessage={setMessage}
             appendDroidOutput={appendDroidOutput}
             onBack={() => setSubScreen("menu")}
+            onStartChat={onStartChat}
           />
         );
       case "run-checks":
@@ -185,6 +185,8 @@ interface SubScreenProps {
   onBack: () => void;
 }
 
+type InvokeDroidStep = "select-droid" | "select-mode" | "enter-prompt";
+
 function InvokeDroidScreen({
   config,
   projectPath,
@@ -193,16 +195,22 @@ function InvokeDroidScreen({
   setMessage,
   appendDroidOutput,
   onBack,
-}: SubScreenProps & { config: OrcaConfig; appendDroidOutput: (chunk: string) => void }) {
-  const [step, setStep] = useState<"select-droid" | "enter-prompt">("select-droid");
+  onStartChat,
+}: SubScreenProps & { 
+  config: OrcaConfig; 
+  appendDroidOutput: (chunk: string) => void;
+  onStartChat?: (prompt: string) => void;
+}) {
+  const [step, setStep] = useState<InvokeDroidStep>("select-droid");
   const [selectedDroid, setSelectedDroid] = useState<string>("");
+  const [selectedMode, setSelectedMode] = useState<"auto" | "chat">("auto");
   const [availableDroids, setAvailableDroids] = useState<string[]>([]);
 
   useEffect(() => {
     listAvailableDroids().then(setAvailableDroids);
   }, []);
 
-  const runDroid = async (prompt: string) => {
+  const runDroidAuto = async (prompt: string) => {
     setLoading(true);
     setLoadingMessage(`Running ${selectedDroid}...`);
 
@@ -233,37 +241,114 @@ function InvokeDroidScreen({
     onBack();
   };
 
+  const startChatSession = (prompt: string) => {
+    if (onStartChat) {
+      // Wrap the prompt with droid context
+      const fullPrompt = `You are acting as the ${selectedDroid} droid.
+
+${prompt}`;
+      onStartChat(fullPrompt);
+    } else {
+      setMessage({
+        type: "error",
+        text: "Interactive chat not available in this context",
+      });
+      onBack();
+    }
+  };
+
+  // Step 1: Select droid
   if (step === "select-droid") {
     if (availableDroids.length === 0) {
       return <Spinner message="Loading available droids..." />;
     }
 
+    const droidItems: MenuItem[] = [
+      ...availableDroids.map((droid) => ({
+        label: droid,
+        value: droid,
+      })),
+      { label: "Cancel", value: "__cancel__" },
+    ];
+
     return (
       <Box flexDirection="column">
-        <Text bold>Select Droid</Text>
-        <QuestionPrompt
-          question="Which droid do you want to invoke?"
-          type="select"
-          options={availableDroids}
-          onAnswer={(answer) => {
-            setSelectedDroid(answer);
-            setStep("enter-prompt");
-          }}
-          onCancel={onBack}
-        />
+        <Text bold color="cyan">Select Droid</Text>
+        <Text color="gray" dimColor>{availableDroids.length} droids available in ~/.factory/droids/</Text>
+        <Box marginTop={1}>
+          <Menu
+            items={droidItems}
+            onSelect={(value) => {
+              if (value === "__cancel__") {
+                onBack();
+              } else {
+                setSelectedDroid(value);
+                setStep("select-mode");
+              }
+            }}
+          />
+        </Box>
       </Box>
     );
   }
 
+  // Step 2: Select mode (auto or chat)
+  if (step === "select-mode") {
+    const modeItems: MenuItem[] = [
+      {
+        label: "Auto (Headless)",
+        value: "auto",
+        hint: "Run to completion, show output",
+      },
+      {
+        label: "Interactive Chat",
+        value: "chat",
+        hint: "Multi-turn conversation",
+      },
+      { label: "Back", value: "__back__" },
+    ];
+
+    return (
+      <Box flexDirection="column">
+        <Text bold color="cyan">Invoke: {selectedDroid}</Text>
+        <Text color="gray" dimColor>How do you want to run this droid?</Text>
+        <Box marginTop={1}>
+          <Menu
+            items={modeItems}
+            onSelect={(value) => {
+              if (value === "__back__") {
+                setStep("select-droid");
+              } else {
+                setSelectedMode(value as "auto" | "chat");
+                setStep("enter-prompt");
+              }
+            }}
+          />
+        </Box>
+      </Box>
+    );
+  }
+
+  // Step 3: Enter prompt
   return (
     <Box flexDirection="column">
-      <Text bold>Invoke: {selectedDroid}</Text>
-      <QuestionPrompt
-        question="Enter your prompt for the droid:"
-        type="text"
-        onAnswer={runDroid}
-        onCancel={onBack}
-      />
+      <Text bold color="cyan">Invoke: {selectedDroid}</Text>
+      <Text color="gray" dimColor>Mode: {selectedMode === "auto" ? "Headless" : "Interactive"}</Text>
+      <Box marginTop={1}>
+        <QuestionPrompt
+          question="Enter your prompt for the droid:"
+          type="multiline"
+          rows={8}
+          onAnswer={(prompt) => {
+            if (selectedMode === "chat") {
+              startChatSession(prompt);
+            } else {
+              runDroidAuto(prompt);
+            }
+          }}
+          onCancel={() => setStep("select-mode")}
+        />
+      </Box>
     </Box>
   );
 }
@@ -414,11 +499,10 @@ function GitOperationsScreen({
   setMessage,
   onBack,
 }: SubScreenProps) {
-  const [branches, setBranches] = useState<string[]>([]);
   const [currentBranch, setCurrentBranch] = useState<string>("");
 
   useEffect(() => {
-    listBranches(projectPath).then(setBranches);
+    listBranches(projectPath);
     getCurrentBranch(projectPath).then((b) => setCurrentBranch(b || ""));
   }, [projectPath]);
 
@@ -443,7 +527,6 @@ function GitOperationsScreen({
           if (value === "back") {
             onBack();
           } else if (value === "create-branch") {
-            // TODO: Prompt for branch name
             setMessage({ type: "info", text: "Use NewSprint to create branches" });
           } else if (value === "rebase") {
             setLoading(true);
