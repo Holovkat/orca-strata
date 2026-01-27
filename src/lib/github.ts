@@ -197,6 +197,44 @@ export async function removeIssueLabel(
   return result.code === 0;
 }
 
+// Map column names to labels
+const STATUS_LABELS: Record<string, string> = {
+  "Ready to Build": "ready-to-build",
+  "In Progress": "in-progress",
+  "Ready for Review": "ready-for-review",
+  "In Review": "in-review",
+  "Ready for UAT": "ready-for-uat",
+  "UAT in Progress": "uat-in-progress",
+  "User Acceptance": "user-acceptance",
+  "Done": "done",
+};
+
+const ALL_STATUS_LABELS = Object.values(STATUS_LABELS);
+
+export async function updateIssueLabels(
+  number: number,
+  newStatus: string
+): Promise<boolean> {
+  // First, get current labels
+  const issue = await getIssue(number);
+  if (!issue) return false;
+
+  // Remove existing status labels
+  for (const label of issue.labels) {
+    if (ALL_STATUS_LABELS.includes(label.toLowerCase())) {
+      await removeIssueLabel(number, label);
+    }
+  }
+
+  // Add the new status label
+  const newLabel = STATUS_LABELS[newStatus];
+  if (newLabel) {
+    return await addIssueLabel(number, newLabel);
+  }
+
+  return true;
+}
+
 // Project board operations
 
 export async function listProjects(): Promise<GitHubProject[]> {

@@ -273,6 +273,53 @@ export async function createShard(
   return filePath;
 }
 
+export async function updateShard(
+  filePath: string,
+  shard: ParsedShard
+): Promise<void> {
+  // Rebuild the markdown content from the parsed shard
+  const requiredReadingStr = shard.requiredReading
+    .map((r) => `- ${r}`)
+    .join("\n");
+
+  const newInShardStr = shard.newInShard.map((n) => `- ${n}`).join("\n");
+
+  const acceptanceCriteriaStr = shard.acceptanceCriteria
+    .map((a) => `- [ ] ${a}`)
+    .join("\n");
+
+  const content = `# ${shard.metadata.title}
+
+## Required Reading
+> **IMPORTANT:** Read this entire shard and ALL linked documents before starting.
+
+${requiredReadingStr || "- None"}
+
+## Context
+${shard.context}
+
+## Task
+${shard.task}
+
+## New in This Shard
+${newInShardStr || "- N/A"}
+
+## Acceptance Criteria
+${acceptanceCriteriaStr}
+
+## Dependencies
+<!-- Auto-populated by orchestrator -->
+- Creates: ${shard.metadata.creates.join(", ") || "N/A"}
+- Depends on: ${shard.metadata.dependencies.join(", ") || "None"}
+- Modifies: ${shard.metadata.modifies.join(", ") || "None"}
+
+## Linked Issue
+GitHub: #${shard.metadata.issueNumber || "TBD"}
+`;
+
+  await writeFile(filePath, content, "utf-8");
+}
+
 export function shardToIssueBody(shard: ParsedShard): string {
   const requiredReadingList = shard.requiredReading
     .map((r) => `- ${r}`)

@@ -4,7 +4,8 @@ export type Screen =
   | "continue-sprint"
   | "view-status"
   | "manual-actions"
-  | "settings";
+  | "settings"
+  | "shard-editor";
 
 export type Phase =
   | "planning"
