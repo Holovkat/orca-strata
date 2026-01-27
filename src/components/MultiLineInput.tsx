@@ -39,10 +39,27 @@ export function MultiLineInput({
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [filePickerLoading, setFilePickerLoading] = useState(false);
 
-  // Load all files recursively when file picker is shown
+  // Resolve path with ~ expansion
+  const resolvePath = (p: string): string => {
+    if (p.startsWith("~/")) {
+      return join(process.env.HOME || "", p.slice(2));
+    }
+    return p;
+  };
+
+  // Check if search query is an absolute path
+  const isAbsolutePath = fileSearchQuery.startsWith("/") || fileSearchQuery.startsWith("~");
+  const searchBasePath = isAbsolutePath ? resolvePath(fileSearchQuery) : projectPath;
+
+  // Load files - either from project or from absolute path
   useEffect(() => {
-    if (!showFilePicker || !projectPath) return;
-    if (allEntries.length > 0) return; // Already loaded
+    if (!showFilePicker) return;
+    
+    // For project search, only load once
+    if (!isAbsolutePath && allEntries.length > 0) return;
+    
+    // For absolute paths, need a base path
+    if (isAbsolutePath && !fileSearchQuery) return;
     
     let cancelled = false;
     
@@ -56,6 +73,65 @@ export function MultiLineInput({
         
         const ignoreDirs = new Set(["node_modules", ".git", "dist", "build", ".next", "coverage", "__pycache__", ".venv", "venv"]);
         
+        // For absolute paths, list the directory contents
+        if (isAbsolutePath) {
+          const basePath = resolvePath(fileSearchQuery);
+          
+          // Check if it's a directory or partial path
+          const stats = await stat(basePath).catch(() => null);
+          
+          if (stats?.isDirectory()) {
+            // List directory contents
+            const entries = await readdir(basePath);
+            for (const entry of entries.slice(0, 50)) {
+              if (entry.startsWith(".")) continue;
+              const fullPath = join(basePath, entry);
+              const entryStats = await stat(fullPath).catch(() => null);
+              if (entryStats) {
+                fileList.push({
+                  name: entry,
+                  path: join(fileSearchQuery, entry),
+                  type: entryStats.isDirectory() ? "folder" : "file",
+                });
+              }
+            }
+          } else {
+            // Partial path - list parent directory and filter
+            const parentDir = basePath.substring(0, basePath.lastIndexOf("/")) || "/";
+            const partial = basePath.substring(basePath.lastIndexOf("/") + 1).toLowerCase();
+            
+            const entries = await readdir(parentDir).catch(() => [] as string[]);
+            for (const entry of entries) {
+              if (entry.startsWith(".")) continue;
+              if (partial && !entry.toLowerCase().startsWith(partial)) continue;
+              
+              const fullPath = join(parentDir, entry);
+              const entryStats = await stat(fullPath).catch(() => null);
+              if (entryStats) {
+                const queryParent = fileSearchQuery.substring(0, fileSearchQuery.lastIndexOf("/") + 1);
+                fileList.push({
+                  name: entry,
+                  path: queryParent + entry,
+                  type: entryStats.isDirectory() ? "folder" : "file",
+                });
+              }
+            }
+          }
+          
+          fileList.sort((a, b) => {
+            if (a.type !== b.type) return a.type === "folder" ? -1 : 1;
+            return a.name.localeCompare(b.name);
+          });
+          
+          if (!cancelled) {
+            setFilteredEntries(fileList.slice(0, 20));
+            setSelectedIndex(0);
+            setFilePickerLoading(false);
+          }
+          return;
+        }
+        
+        // Project-relative search - scan recursively
         const scanDir = async (dir: string, relativePath: string) => {
           if (cancelled || fileList.length >= maxEntries) return;
           
@@ -86,10 +162,9 @@ export function MultiLineInput({
           }
         };
         
-        await scanDir(projectPath, "");
+        await scanDir(projectPath || ".", "");
         
         if (!cancelled) {
-          // Sort alphabetically
           fileList.sort((a, b) => a.path.localeCompare(b.path));
           setAllEntries(fileList);
           setFilteredEntries(fileList.slice(0, 20));
@@ -108,10 +183,13 @@ export function MultiLineInput({
     loadFiles();
     
     return () => { cancelled = true; };
-  }, [showFilePicker, projectPath, allEntries.length]);
+  }, [showFilePicker, projectPath, allEntries.length, isAbsolutePath, fileSearchQuery]);
 
-  // Filter entries based on search query (fuzzy match on path)
+  // Filter entries based on search query (fuzzy match on path) - only for project-relative searches
   useEffect(() => {
+    // Skip for absolute paths - handled in the load effect
+    if (isAbsolutePath) return;
+    
     if (!fileSearchQuery) {
       setFilteredEntries(allEntries.slice(0, 20));
     } else {
@@ -123,7 +201,7 @@ export function MultiLineInput({
       setFilteredEntries(matches.slice(0, 20));
     }
     setSelectedIndex(0);
-  }, [fileSearchQuery, allEntries]);
+  }, [fileSearchQuery, allEntries, isAbsolutePath]);
 
   useInput((input, key) => {
     // File picker mode
@@ -290,16 +368,16 @@ export function MultiLineInput({
         >
           <Box marginBottom={1}>
             <Text bold color="yellow">@ File Reference</Text>
-            <Text color="gray"> - type to search</Text>
+            <Text color="gray"> - {isAbsolutePath ? "browsing filesystem" : "type to search (~ or / for absolute path)"}</Text>
           </Box>
           <Box marginBottom={1}>
-            <Text color="cyan">Search: </Text>
+            <Text color="cyan">{isAbsolutePath ? "Path: " : "Search: "}</Text>
             <Text color="green">{fileSearchQuery}</Text>
             <Text backgroundColor="white" color="black"> </Text>
-            {fileSearchQuery && <Text color="gray"> ({filteredEntries.length} matches)</Text>}
+            {!isAbsolutePath && fileSearchQuery && <Text color="gray"> ({filteredEntries.length} matches)</Text>}
           </Box>
           {filePickerLoading ? (
-            <Text color="yellow">Scanning project files...</Text>
+            <Text color="yellow">{isAbsolutePath ? "Loading..." : "Scanning project files..."}</Text>
           ) : visibleEntries.length === 0 ? (
             <Text color="gray" dimColor>No files found</Text>
           ) : (
