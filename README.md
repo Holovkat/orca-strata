@@ -5,13 +5,6 @@ A menu-driven TUI orchestrator that coordinates AI-powered development workflows
 ## Installation
 
 ```bash
-# With bun (recommended)
-bun install -g orca-cli
-
-# With npm
-npm install -g orca-cli
-
-# From source
 git clone https://github.com/Holovkat/orca-strata.git
 cd orca-strata
 bun install
