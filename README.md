@@ -1,6 +1,6 @@
 # Orca
 
-A menu-driven TUI orchestrator that coordinates AI-powered development workflows by invoking droids headlessly via `droid exec`.
+A menu-driven TUI orchestrator that coordinates AI-powered development workflows by invoking droids as background services.
 
 ## Installation
 
