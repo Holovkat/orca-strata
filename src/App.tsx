@@ -216,7 +216,7 @@ export function App({ config, projectPath, configFile }: AppProps) {
   return (
     <Box flexDirection="column" padding={1}>
       <Header
-        projectName={currentConfig.project_name}
+        projectName={currentConfig.project_name || currentProjectPath.split("/").pop() || "Unnamed Project"}
         sprintStatus={sprintStatus}
       />
       {renderScreen()}
