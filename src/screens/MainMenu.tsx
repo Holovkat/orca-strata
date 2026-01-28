@@ -19,9 +19,9 @@ export function MainMenu({ onSelect, sprintStatus }: MainMenuProps) {
 
   const menuItems: MenuItem[] = [
     {
-      label: "Start New Sprint",
+      label: "Sprint",
       value: "new-sprint",
-      hint: "Plan and create a new sprint",
+      hint: "Plan, review, and create sprints",
     },
     {
       label: "Continue Sprint",
