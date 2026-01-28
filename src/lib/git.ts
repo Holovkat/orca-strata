@@ -130,7 +130,8 @@ export async function createWorktree(
 export async function createWorktreeWithNewBranch(
   path: string,
   branch: string,
-  cwd?: string
+  cwd?: string,
+  baseBranch?: string
 ): Promise<{ success: boolean; error?: string }> {
   const parentDir = join(path, "..");
   try {
@@ -148,9 +149,19 @@ export async function createWorktreeWithNewBranch(
   const branchExists = await runGit(["rev-parse", "--verify", branch], cwd);
   
   // Use existing branch or create new one
-  const result = branchExists.code === 0
-    ? await runGit(["worktree", "add", path, branch], cwd)
-    : await runGit(["worktree", "add", "-b", branch, path], cwd);
+  // If baseBranch specified, create from that branch (for stacked dependencies)
+  let result;
+  if (branchExists.code === 0) {
+    // Branch exists - just add worktree pointing to it
+    result = await runGit(["worktree", "add", path, branch], cwd);
+  } else if (baseBranch) {
+    // Create new branch from specified base (dependency stacking)
+    debugCallback?.(`[git] Creating branch ${branch} from base ${baseBranch}\n`);
+    result = await runGit(["worktree", "add", "-b", branch, path, baseBranch], cwd);
+  } else {
+    // Create new branch from current HEAD (sprint branch)
+    result = await runGit(["worktree", "add", "-b", branch, path], cwd);
+  }
   
   if (result.code !== 0) {
     return { success: false, error: result.stderr || "Failed to create worktree" };
