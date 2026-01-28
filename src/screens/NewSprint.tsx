@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useEffect } from "react";
 import { Box, Text, useInput } from "ink";
 import { join } from "path";
+import { mkdir, writeFile } from "fs/promises";
 import { QuestionPrompt } from "../components/QuestionPrompt.js";
 import { Menu, type MenuItem } from "../components/Menu.js";
 import { Spinner } from "../components/Spinner.js";
@@ -296,6 +297,9 @@ Return ONLY the JSON array, no other text.`;
         throw new Error("AI response missing required shard-00-architecture");
       }
 
+      // Save shards to disk immediately so they persist if app exits
+      await saveShardDrafts(shards, sprintData.name || "initial-implementation");
+
       setSprintData((prev) => ({ ...prev, shardDrafts: shards }));
       setLoading(false);
       setStep("review-shards");
@@ -542,6 +546,66 @@ Return ONLY the JSON object, no other text.`;
     } catch {
       return null;
     }
+  };
+
+  // Save shard drafts to disk so they persist if app exits
+  const saveShardDrafts = async (shards: ShardDraft[], sprintName: string): Promise<void> => {
+    try {
+      const sprintDir = join(selectedProjectPath, "features", "sprints", sprintName);
+      await mkdir(sprintDir, { recursive: true });
+      
+      for (const shard of shards) {
+        const filePath = join(sprintDir, `${shard.id}.md`);
+        const content = shardDraftToMarkdown(shard);
+        await writeFile(filePath, content, "utf-8");
+      }
+    } catch (err) {
+      console.error("Failed to save shard drafts:", err);
+      // Non-fatal - continue even if save fails
+    }
+  };
+
+  // Convert ShardDraft to markdown format
+  const shardDraftToMarkdown = (shard: ShardDraft): string => {
+    const requiredReading = shard.requiredReading.length > 0
+      ? shard.requiredReading.map(r => `- [${r.label}](${r.path})`).join("\n")
+      : "- None";
+    
+    const acceptanceCriteria = shard.acceptanceCriteria.length > 0
+      ? shard.acceptanceCriteria.map(c => `- [ ] ${c}`).join("\n")
+      : "- [ ] TBD";
+    
+    return `# ${shard.title}
+
+## Required Reading
+> **IMPORTANT:** Read this entire shard and ALL linked documents before starting.
+
+${requiredReading}
+
+## Context
+${shard.context}
+
+## Task
+${shard.task}
+
+## New in This Shard
+${shard.newInShard.length > 0 ? shard.newInShard.map(n => `- ${n}`).join("\n") : "- N/A"}
+
+## Acceptance Criteria
+${acceptanceCriteria}
+
+## Dependencies
+<!-- Auto-populated by orchestrator -->
+- Creates: ${shard.creates.join(", ") || "N/A"}
+- Depends on: ${shard.dependsOn.join(", ") || "None"}
+- Modifies: ${shard.modifies.join(", ") || "None"}
+
+## UI/UX Design
+${shard.uiDesignSpec || "No UI design spec required for this shard."}
+
+## Linked Issue
+GitHub: #TBD
+`;
   };
 
   // Load global design templates
@@ -876,6 +940,9 @@ Return ONLY the JSON array, no other text.`;
       }
 
       const shardDrafts: ShardDraft[] = JSON.parse(jsonMatch[0]);
+
+      // Save shards to disk immediately so they persist if app exits
+      await saveShardDrafts(shardDrafts, sprintData.name || "sprint");
 
       setSprintData((prev) => ({ ...prev, shardDrafts }));
       setLoading(false);
