@@ -1,8 +1,12 @@
-import { mkdir, writeFile } from "fs/promises";
+import { mkdir, writeFile, readdir, readFile, copyFile } from "fs/promises";
 import { join } from "path";
 import { spawn } from "child_process";
+import { homedir } from "os";
 import type { OrcaConfig } from "./types.js";
 import { DEFAULT_CONFIG } from "./types.js";
+
+// Global UI/UX guidelines path
+const GLOBAL_UI_GUIDELINES_PATH = "~/workspace/designs/templates/ui-ux-guidelines";
 
 export interface ScaffoldResult {
   success: boolean;
@@ -127,6 +131,55 @@ async function runCommand(cmd: string, args: string[], cwd: string): Promise<voi
   });
 }
 
+// Copy global UI/UX guidelines to project docs/design folder
+async function copyUiUxGuidelines(projectPath: string): Promise<void> {
+  const sourcePath = GLOBAL_UI_GUIDELINES_PATH.startsWith("~/")
+    ? join(homedir(), GLOBAL_UI_GUIDELINES_PATH.slice(2))
+    : GLOBAL_UI_GUIDELINES_PATH;
+  
+  const destPath = join(projectPath, "docs", "design", "ui-ux-guidelines");
+  
+  try {
+    // Create destination directory
+    await mkdir(destPath, { recursive: true });
+    
+    // Read all files from source
+    const files = await readdir(sourcePath);
+    
+    // Copy each file
+    for (const file of files) {
+      const srcFile = join(sourcePath, file);
+      const destFile = join(destPath, file);
+      await copyFile(srcFile, destFile);
+    }
+    
+    // Create an index file pointing to the guidelines
+    const indexContent = `# UI/UX Design Guidelines
+
+This project follows the global UI/UX design guidelines.
+
+## Contents
+
+${files.filter(f => f.endsWith('.md')).map(f => `- [${f.replace('.md', '').replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}](./ui-ux-guidelines/${f})`).join('\n')}
+
+## Usage
+
+All UI components and patterns in this project MUST adhere to these guidelines.
+Agents should reference these documents when implementing any UI/UX work.
+
+## Design Tokens
+
+The \`design-tokens.json\` file contains all color, spacing, typography, and other design tokens.
+Import and use these tokens in your components for consistency.
+`;
+    
+    await writeFile(join(projectPath, "docs", "design", "README.md"), indexContent);
+  } catch (err) {
+    // Non-fatal - guidelines might not exist
+    console.error("Warning: Could not copy UI/UX guidelines:", err);
+  }
+}
+
 export async function scaffoldProject(
   projectPath: string,
   projectName: string
@@ -182,8 +235,10 @@ branching:
 
     // Create .gitkeep files for empty directories
     await writeFile(join(projectPath, "features", "sprints", ".gitkeep"), "");
-    await writeFile(join(projectPath, "docs", "design", ".gitkeep"), "");
     await writeFile(join(projectPath, "src", ".gitkeep"), "");
+
+    // Copy global UI/UX guidelines to docs/design
+    await copyUiUxGuidelines(projectPath);
 
     // Initialize git
     await runCommand("git", ["init"], projectPath);

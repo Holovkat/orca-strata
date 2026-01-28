@@ -449,8 +449,18 @@ Return ONLY the JSON object, no other text.`;
       
       const prompt = `You are a UI/UX designer creating detailed design specifications for a development shard.
 
-## Global Design System
-${templates || "No global design templates configured."}
+## Design Guidelines Location
+The project has UI/UX guidelines at: docs/design/ui-ux-guidelines/
+These include:
+- design-tokens.md / design-tokens.json - Colors, spacing, typography tokens
+- component-patterns.md - Component design patterns
+- form-patterns.md - Form design patterns
+- layout-patterns.md - Layout patterns
+- interactive-patterns.md - Interactive patterns
+- data-display-patterns.md - Data display patterns
+
+## Global Design System Reference
+${templates || "No additional global templates configured."}
 
 ## Shard to Design
 Title: ${shard.title}
@@ -459,18 +469,20 @@ Context: ${shard.context}
 Creates: ${shard.creates.join(", ")}
 
 ## Your Task
-Create a detailed UI/UX specification for this shard that a developer can implement exactly. Include:
+Create a detailed UI/UX specification for this shard that a developer can implement exactly.
+Reference the project's design guidelines (docs/design/ui-ux-guidelines/) and include:
 
 1. **Component Structure**: List each component/screen with hierarchy
-2. **Layout**: Exact layout specifications (flexbox/grid, spacing, dimensions)
-3. **Colors**: Specific color values from the design system (or suggest if not defined)
-4. **Typography**: Font sizes, weights, line heights
+2. **Layout**: Exact layout specifications using design tokens (flexbox/grid, spacing, dimensions)
+3. **Colors**: Specific color values from design-tokens.md
+4. **Typography**: Font sizes, weights, line heights from design tokens
 5. **States**: All interactive states (hover, focus, active, disabled, loading, error)
 6. **Responsive**: Behavior at different breakpoints
-7. **Interactions**: Animations, transitions, user feedback
+7. **Interactions**: Animations, transitions, user feedback per interactive-patterns.md
 8. **Accessibility**: ARIA labels, keyboard navigation, contrast requirements
 
-Format as markdown that can be included in the shard document.`;
+Format as markdown that can be included in the shard document.
+Include file references like: See [Design Tokens](../docs/design/ui-ux-guidelines/design-tokens.md)`;
 
       const result = await invokeDroid(
         {
