@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Box, Text, useInput } from "ink";
+import { Box, Text, useInput, useStdout } from "ink";
 import { Menu, type MenuItem } from "../components/Menu.js";
 import { QuestionPrompt } from "../components/QuestionPrompt.js";
 import { StatusMessage } from "../components/StatusMessage.js";
@@ -247,26 +247,32 @@ export function Settings({ config, onBack, onConfigChange }: SettingsProps) {
     }
   };
 
+  const { stdout } = useStdout();
+  const terminalHeight = stdout?.rows || 24;
+  const configPreviewLines = Math.max(3, terminalHeight - 20);
+
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" height={terminalHeight - 1}>
       {message && (
-        <Box marginBottom={1}>
+        <Box marginBottom={1} flexShrink={0}>
           <StatusMessage type={message.type} message={message.text} />
         </Box>
       )}
-      {renderSubScreen()}
+      <Box flexGrow={1} overflow="hidden">
+        {renderSubScreen()}
+      </Box>
       {subScreen === "menu" && (
-        <Box marginTop={1} flexDirection="column">
+        <Box marginTop={1} flexDirection="column" flexShrink={0}>
           <Text bold color="gray">
             Current Configuration:
           </Text>
           <Text color="gray">
-            {JSON.stringify(config, null, 2).split("\n").slice(0, 10).join("\n")}
+            {JSON.stringify(config, null, 2).split("\n").slice(0, configPreviewLines).join("\n")}
             ...
           </Text>
         </Box>
       )}
-      <Box marginTop={1}>
+      <Box marginTop={1} flexShrink={0}>
         <Text color="gray">Esc to go back</Text>
       </Box>
     </Box>

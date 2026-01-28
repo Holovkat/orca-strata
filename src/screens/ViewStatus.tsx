@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Box, Text, useInput } from "ink";
+import { Box, Text, useInput, useStdout } from "ink";
 import { join } from "path";
 import { Menu, type MenuItem } from "../components/Menu.js";
 import { Spinner } from "../components/Spinner.js";
@@ -211,6 +211,10 @@ export function ViewStatus({
 }
 
 function BoardView({ sprintStatus }: { sprintStatus: SprintStatus | null }) {
+  const { stdout } = useStdout();
+  const terminalHeight = stdout?.rows || 24;
+  const terminalWidth = stdout?.columns || 80;
+  
   if (!sprintStatus) {
     return <Text color="gray">No active sprint</Text>;
   }
@@ -225,55 +229,76 @@ function BoardView({ sprintStatus }: { sprintStatus: SprintStatus | null }) {
     { name: "User Acceptance", count: sprintStatus.counts.userAcceptance, color: "white" },
     { name: "Done", count: sprintStatus.counts.done, color: "green" },
   ];
+  
+  // Scale bars to fit terminal width
+  const maxBarWidth = Math.max(10, terminalWidth - 30);
+  const maxCount = Math.max(...columns.map(c => c.count), 1);
 
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" height={terminalHeight - 4}>
       <Text bold>Kanban Board: {sprintStatus.sprint.name}</Text>
-      <Box marginY={1} flexDirection="column">
-        {columns.map((col) => (
-          <Box key={col.name} gap={1}>
-            <Box width={20}>
-              <Text color={col.color as any}>{col.name}</Text>
+      <Box marginY={1} flexDirection="column" flexGrow={1} overflow="hidden">
+        {columns.map((col) => {
+          const barWidth = Math.round((col.count / maxCount) * Math.min(maxCount, maxBarWidth));
+          return (
+            <Box key={col.name} gap={1}>
+              <Box width={18}>
+                <Text color={col.color as any}>{col.name}</Text>
+              </Box>
+              <Text color={col.color as any}>{"█".repeat(barWidth)}</Text>
+              <Text color="gray"> {col.count}</Text>
             </Box>
-            <Text color={col.color as any}>{"█".repeat(col.count)}</Text>
-            <Text color="gray"> {col.count}</Text>
-          </Box>
-        ))}
+          );
+        })}
       </Box>
     </Box>
   );
 }
 
 function IssuesView({ sprintStatus }: { sprintStatus: SprintStatus | null }) {
+  const { stdout } = useStdout();
+  const terminalHeight = stdout?.rows || 24;
+  const terminalWidth = stdout?.columns || 80;
+  const maxItems = Math.max(5, terminalHeight - 6);
+  
   if (!sprintStatus) {
     return <Text color="gray">No active sprint</Text>;
   }
+  
+  const truncate = (text: string, max: number) => 
+    text.length <= max ? text : text.slice(0, max - 3) + "...";
 
   return (
-    <Box flexDirection="column">
-      <Text bold>GitHub Issues</Text>
-      <Box marginY={1} flexDirection="column">
-        {sprintStatus.sprint.shards.map((shard) => (
+    <Box flexDirection="column" height={terminalHeight - 4}>
+      <Text bold>GitHub Issues ({sprintStatus.sprint.shards.length})</Text>
+      <Box marginY={1} flexDirection="column" flexGrow={1} overflow="hidden">
+        {sprintStatus.sprint.shards.slice(0, maxItems).map((shard) => (
           <Box key={shard.id} gap={1}>
             <Text color="cyan">#{shard.issueNumber || "?"}</Text>
-            <Text>{shard.title}</Text>
+            <Text wrap="truncate-end">{truncate(shard.title, terminalWidth - 25)}</Text>
             <Text color="gray">[{shard.status}]</Text>
           </Box>
         ))}
+        {sprintStatus.sprint.shards.length > maxItems && (
+          <Text color="gray" dimColor>+{sprintStatus.sprint.shards.length - maxItems} more...</Text>
+        )}
       </Box>
     </Box>
   );
 }
 
 function DroidsView({ sprintStatus }: { sprintStatus: SprintStatus | null }) {
+  const { stdout } = useStdout();
+  const terminalHeight = stdout?.rows || 24;
+  
   if (!sprintStatus || sprintStatus.activeDroids.length === 0) {
     return <Text color="gray">No active droids</Text>;
   }
 
   return (
-    <Box flexDirection="column">
-      <Text bold>Active Droids</Text>
-      <Box marginY={1} flexDirection="column">
+    <Box flexDirection="column" height={terminalHeight - 4}>
+      <Text bold>Active Droids ({sprintStatus.activeDroids.length})</Text>
+      <Box marginY={1} flexDirection="column" flexGrow={1} overflow="hidden">
         {sprintStatus.activeDroids.map((droid) => (
           <Box key={droid.shardId} gap={1}>
             <Text color="yellow">⠋</Text>
@@ -295,6 +320,10 @@ interface ShardsViewProps {
 }
 
 function ShardsView({ sprintStatus, onEditShard }: ShardsViewProps) {
+  const { stdout } = useStdout();
+  const terminalHeight = stdout?.rows || 24;
+  const terminalWidth = stdout?.columns || 80;
+  
   if (!sprintStatus) {
     return <Text color="gray">No active sprint</Text>;
   }
@@ -309,10 +338,13 @@ function ShardsView({ sprintStatus, onEditShard }: ShardsViewProps) {
     "User Acceptance": "white",
     "Done": "green",
   };
+  
+  const truncate = (text: string, max: number) => 
+    text.length <= max ? text : text.slice(0, max - 3) + "...";
 
   // Convert shards to menu items
   const shardItems: MenuItem[] = sprintStatus.sprint.shards.map((shard) => ({
-    label: `${shard.title}`,
+    label: truncate(shard.title, terminalWidth - 30),
     value: shard.id,
     hint: `[${shard.type}] ${shard.status}`,
   }));
@@ -320,10 +352,10 @@ function ShardsView({ sprintStatus, onEditShard }: ShardsViewProps) {
   shardItems.push({ label: "Back to Menu", value: "__back__" });
 
   return (
-    <Box flexDirection="column">
-      <Text bold>Shards - Click/Enter to Edit</Text>
+    <Box flexDirection="column" height={terminalHeight - 4}>
+      <Text bold>Shards - Click/Enter to Edit ({sprintStatus.sprint.shards.length})</Text>
       <Text color="gray" dimColor>Editing a shard will reset its status if content changes</Text>
-      <Box marginY={1}>
+      <Box marginY={1} flexGrow={1} overflow="hidden">
         <Menu
           items={shardItems}
           onSelect={(value) => {

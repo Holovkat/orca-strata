@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from "react";
-import { Box, Text, useInput } from "ink";
+import { Box, Text, useInput, useStdout } from "ink";
 import { Menu, type MenuItem } from "../components/Menu.js";
 import { Spinner } from "../components/Spinner.js";
 import { StatusMessage } from "../components/StatusMessage.js";
@@ -238,34 +238,39 @@ export function ContinueSprint({
     }
   };
 
+  const { stdout } = useStdout();
+  const terminalHeight = stdout?.rows || 24;
+
   return (
-    <Box flexDirection="column">
-      <Box marginBottom={1}>
+    <Box flexDirection="column" height={terminalHeight - 1}>
+      <Box marginBottom={1} flexShrink={0}>
         <Text bold color="white">
           Sprint: {sprintStatus.sprint.name}
         </Text>
         <Text color="gray"> - Phase: {currentPhase}</Text>
       </Box>
       {message && (
-        <Box marginBottom={1}>
+        <Box marginBottom={1} flexShrink={0}>
           <StatusMessage type={message.type} message={message.text} />
         </Box>
       )}
       {loading ? (
-        <Box flexDirection="column">
+        <Box flexDirection="column" flexGrow={1} overflow="hidden">
           <Spinner message={loadingMessage} />
           {droidOutput && (
-            <Box marginTop={1} flexDirection="column">
+            <Box marginTop={1} flexDirection="column" flexGrow={1} overflow="hidden">
               <Text color="yellow">--- Droid Output ---</Text>
-              <Markdown maxLines={30}>{droidOutput.slice(-2000)}</Markdown>
+              <Markdown maxLines={Math.max(10, terminalHeight - 10)}>{droidOutput.slice(-2000)}</Markdown>
             </Box>
           )}
         </Box>
       ) : (
-        renderSubScreen()
+        <Box flexGrow={1} overflow="hidden">
+          {renderSubScreen()}
+        </Box>
       )}
       {!loading && (
-        <Box marginTop={1}>
+        <Box marginTop={1} flexShrink={0}>
           <Text color="gray">Esc to go back</Text>
         </Box>
       )}
