@@ -2,21 +2,31 @@
   "name": "orca-cli",
   "version": "0.1.0",
   "description": "Menu-driven orchestrator for coordinating development workflows with AI droids",
-  "module": "src/index.tsx",
   "type": "module",
+  "main": "./dist/cli.js",
+  "module": "./dist/cli.js",
+  "exports": {
+    ".": {
+      "import": "./dist/cli.js",
+      "default": "./dist/cli.js"
+    }
+  },
   "bin": {
     "orca": "./dist/cli.js"
   },
+  "engines": {
+    "node": ">=18.0.0",
+    "bun": ">=1.0.0"
+  },
   "scripts": {
     "dev": "bun run src/cli.tsx",
-    "build": "bun build src/cli.tsx --outdir dist --target node",
+    "build": "bun build src/cli.tsx --outdir dist --target bun",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
     "prepublishOnly": "bun run build"
   },
   "files": [
-    "dist",
-    "templates"
+    "dist"
   ],
   "keywords": [
     "cli",
