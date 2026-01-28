@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { Box, Text, useInput } from "ink";
+import { Box, Text, useInput, useStdout } from "ink";
 import { Menu, type MenuItem } from "../components/Menu.js";
 import { QuestionPrompt } from "../components/QuestionPrompt.js";
 import { Spinner } from "../components/Spinner.js";
@@ -149,27 +149,32 @@ export function ManualActions({ config, projectPath, onBack, onStartChat }: Manu
     }
   };
 
+  const { stdout } = useStdout();
+  const terminalHeight = stdout?.rows || 24;
+
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" height={terminalHeight - 1}>
       {message && (
-        <Box marginBottom={1}>
+        <Box marginBottom={1} flexShrink={0}>
           <StatusMessage type={message.type} message={message.text} />
         </Box>
       )}
       {loading ? (
-        <Box flexDirection="column">
+        <Box flexDirection="column" flexGrow={1} overflow="hidden">
           <Spinner message={loadingMessage} />
           {droidOutput && (
-            <Box marginTop={1}>
-              <Text color="gray">{droidOutput.slice(-500)}</Text>
+            <Box marginTop={1} flexGrow={1} overflow="hidden">
+              <Text color="gray">{droidOutput.slice(-(terminalHeight * 80))}</Text>
             </Box>
           )}
         </Box>
       ) : (
-        renderSubScreen()
+        <Box flexGrow={1} overflow="hidden">
+          {renderSubScreen()}
+        </Box>
       )}
       {!loading && (
-        <Box marginTop={1}>
+        <Box marginTop={1} flexShrink={0}>
           <Text color="gray">Esc to go back</Text>
         </Box>
       )}
