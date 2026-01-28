@@ -76,6 +76,7 @@ export interface Shard {
   assignedDroid?: string;
   worktree?: string;
   branch?: string;
+  model?: string; // Override model for this shard (defaults to config.droids.model)
 }
 
 export interface Sprint {

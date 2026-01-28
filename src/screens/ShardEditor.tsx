@@ -23,7 +23,7 @@ interface ShardEditorProps {
 }
 
 type ViewSection = "context" | "task" | "criteria";
-type EditorMode = "view" | "edit" | "menu" | "deprecate-reason" | "deprecate-review";
+type EditorMode = "view" | "edit" | "menu" | "deprecate-reason" | "deprecate-review" | "model-select";
 
 export function ShardEditor({
   config,
@@ -322,8 +322,57 @@ Provide a brief impact summary, affected dependencies, and recommendation.`;
     );
   }
 
+  // Model selection mode
+  if (mode === "model-select") {
+    const availableModels = [
+      { label: "Use Default", value: "", hint: config.droids.model },
+      { label: "─────────────", value: "divider", disabled: true },
+      { label: "Claude Sonnet 4", value: "claude-sonnet-4-20250514", hint: "Fast, balanced" },
+      { label: "Claude Sonnet 4.5", value: "claude-sonnet-4-5-20250929", hint: "Latest, best quality" },
+      { label: "Claude Opus 4", value: "claude-opus-4-20250514", hint: "Most capable" },
+      { label: "─────────────", value: "divider2", disabled: true },
+      { label: "Custom Model...", value: "custom", hint: "Enter model name" },
+      { label: "Cancel", value: "cancel" },
+    ];
+    
+    return (
+      <Box flexDirection="column" height={terminalHeight - 1}>
+        <Text bold color="cyan">Set Model Override for: {shard.title}</Text>
+        <Text color="gray" dimColor>Current: {shard.model || `(default: ${config.droids.model})`}</Text>
+        
+        <Box marginY={1} flexGrow={1}>
+          <Menu
+            items={availableModels}
+            onSelect={(value) => {
+              if (value === "cancel") {
+                setMode("menu");
+              } else if (value === "custom") {
+                setEditBuffer(shard.model || "");
+                setMode("edit");
+                setActiveSection("context"); // Repurpose for model input
+              } else if (value === "") {
+                // Clear override - use default
+                onShardUpdated({ ...shard, model: undefined });
+                setSuccess("Model override cleared. Using default.");
+                setMode("menu");
+              } else if (!value.startsWith("divider")) {
+                // Set the selected model
+                onShardUpdated({ ...shard, model: value });
+                setSuccess(`Model set to: ${value}`);
+                setMode("menu");
+              }
+            }}
+          />
+        </Box>
+      </Box>
+    );
+  }
+
   // Menu mode
   if (mode === "menu") {
+    const currentModel = shard.model || config.droids.model;
+    const isOverridden = !!shard.model;
+    
     return (
       <Box flexDirection="column" height={terminalHeight - 1}>
         <Box flexShrink={0} marginBottom={1}>
@@ -337,6 +386,12 @@ Provide a brief impact summary, affected dependencies, and recommendation.`;
           <Text color="gray"> • Type: {shard.type}</Text>
         </Box>
         
+        <Box flexShrink={0}>
+          <Text>Model: </Text>
+          <Text color={isOverridden ? "yellow" : "gray"}>{currentModel}</Text>
+          {isOverridden && <Text color="yellow"> (override)</Text>}
+        </Box>
+        
         {error && <StatusMessage type="error" message={error} />}
         {success && <StatusMessage type="success" message={success} />}
         
@@ -345,6 +400,7 @@ Provide a brief impact summary, affected dependencies, and recommendation.`;
             title="Actions"
             items={[
               { label: "View/Edit Content", value: "view", hint: "Tab to switch sections, Enter to edit" },
+              { label: "Set Model Override", value: "model", hint: isOverridden ? `Current: ${shard.model}` : "Using default" },
               { label: "─────────────", value: "divider", disabled: true },
               { label: "⚠️ Deprecate Shard", value: "deprecate", hint: "Mark as deprecated" },
               { label: "Back", value: "back" },
@@ -352,6 +408,7 @@ Provide a brief impact summary, affected dependencies, and recommendation.`;
             onSelect={(value) => {
               if (value === "back") onBack();
               else if (value === "view") setMode("view");
+              else if (value === "model") setMode("model-select");
               else if (value === "deprecate") setMode("deprecate-reason");
             }}
           />
