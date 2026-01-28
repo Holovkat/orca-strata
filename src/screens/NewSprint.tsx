@@ -214,11 +214,24 @@ export function NewSprint({
       const { readFile } = await import("fs/promises");
       const prdPath = join(selectedProjectPath, "features", "prd.md");
       const prdContent = await readFile(prdPath, "utf-8");
+      
+      // Try to load design tokens for UI guidance
+      let designTokens = "";
+      try {
+        const tokensPath = join(selectedProjectPath, "docs", "design", "ui-ux-guidelines", "design-tokens.md");
+        designTokens = await readFile(tokensPath, "utf-8");
+      } catch {
+        // Design tokens not available
+      }
 
       const prompt = `You are analyzing a Product Requirements Document (PRD) to create an implementation plan.
 
 ## PRD Content
 ${prdContent}
+
+${designTokens ? `## Design System (Reference for UI shards)
+${designTokens.slice(0, 2000)}
+` : ""}
 
 ## Your Task
 Create a comprehensive implementation plan broken into atomic shards.
@@ -235,6 +248,13 @@ Create a comprehensive implementation plan broken into atomic shards.
    - Prioritize MVP features first
    - Each shard should be completable in a single droid session
    - ALL shards MUST depend on shard-00-architecture
+
+3. For FRONTEND/FULLSTACK shards, include UI specifications in the task:
+   - Reference design tokens (colors, spacing, typography)
+   - Specify component hierarchy and layout
+   - Define all states (default, hover, focus, disabled, loading, error)
+   - Include responsive behavior
+   - Note accessibility requirements
 
 ## Output Format
 Return a JSON array of shard objects:
@@ -259,15 +279,27 @@ Return a JSON array of shard objects:
     "context": "From PRD: [relevant section]",
     "task": "Specific implementation task",
     "type": "backend|frontend|fullstack",
-    "requiredReading": [{"label": "Architecture", "path": "../../docs/design/architecture.md"}],
+    "requiredReading": [
+      {"label": "Architecture", "path": "../../docs/design/architecture.md"},
+      {"label": "Design Tokens", "path": "../../docs/design/ui-ux-guidelines/design-tokens.md"}
+    ],
     "newInShard": ["Component A", "Service B"],
-    "acceptanceCriteria": ["Feature works", "Tests pass"],
+    "acceptanceCriteria": ["Feature works", "Tests pass", "Matches design specs"],
     "creates": ["src/components/X.tsx"],
     "dependsOn": ["shard-00-architecture"],
-    "modifies": []
+    "modifies": [],
+    "uiSpec": "For frontend/fullstack only: Component hierarchy, layout (flex/grid), spacing tokens, colors for states, responsive breakpoints, accessibility notes. Leave empty for backend shards."
   }
 ]
 \`\`\`
+
+For frontend/fullstack shards, the uiSpec field MUST include:
+- Component tree structure
+- Layout type (flex column, grid 2-col, etc.)
+- Spacing values (use token names like spacing-4)
+- Colors for all states (default, hover, focus, disabled)
+- Responsive behavior (mobile-first, breakpoints)
+- Accessibility (ARIA roles, keyboard nav)
 
 Return ONLY the JSON array, no other text.`;
 
@@ -292,7 +324,14 @@ Return ONLY the JSON array, no other text.`;
         throw new Error("Failed to parse shard definitions from AI response");
       }
 
-      const shards = JSON.parse(jsonMatch[0]) as ShardDraft[];
+      const rawShards = JSON.parse(jsonMatch[0]) as Array<ShardDraft & { uiSpec?: string }>;
+      
+      // Map uiSpec to uiDesignSpec
+      const shards: ShardDraft[] = rawShards.map(s => ({
+        ...s,
+        uiDesignSpec: s.uiSpec || s.uiDesignSpec,
+        needsUiReview: (s.type === "frontend" || s.type === "fullstack") && !s.uiSpec,
+      }));
       
       // Validate architecture shard exists
       if (!shards.some(s => s.id === "shard-00-architecture")) {
