@@ -97,26 +97,32 @@ app_url: "http://localhost:3000"
 
 ## Droid Integration
 
-Orca uses Factory Droid's stock CLI - no custom agents or plugins required.
+Orca uses Factory Droid's stock CLI via the **stream-jsonrpc** protocol - no custom agents or plugins required.
 
 ### How Droids Are Invoked
 
-When a shard is ready to build, Orca:
+Orca spawns droid sessions programmatically:
 
 ```bash
-droid exec --auto high --model claude-sonnet-4-5-20250929 \
-  --cwd /path/to/worktree \
-  "Implement shard: <title>. Read shard file for requirements..."
+droid exec --input-format stream-jsonrpc --output-format stream-jsonrpc \
+  --cwd /path/to/worktree --auto high --model claude-sonnet-4-5-20250929
 ```
 
-The `--auto` level controls how much autonomy the droid has:
+Prompts are sent via JSON-RPC messages, not command-line arguments. This enables:
+- **Streaming output** - Real-time progress in the TUI
+- **Session persistence** - Multiple prompts in one session
+- **Programmatic control** - Permission handling, model switching
+
+### Auto Levels
+
+The `--auto` level controls droid autonomy:
 - `low` - Asks before most actions
 - `medium` - Asks before destructive actions
 - `high` - Fully autonomous (recommended for isolated worktrees)
 
 ### Shard Context
 
-Each droid receives:
+Each droid session receives a prompt containing:
 - Shard file path with requirements and acceptance criteria
 - Isolated worktree directory to work in
 - Model override (per-shard or from config)
