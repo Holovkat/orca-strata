@@ -503,6 +503,7 @@ Begin implementation.`;
           droid: droidName,
           prompt,
           autoLevel: "high",
+          model: shard.model, // Use shard-specific model if set
           cwd: worktreePath,
         },
         config,
