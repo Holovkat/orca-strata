@@ -13,6 +13,11 @@ import {
   getCurrentBranch,
   setGitDebugCallback,
   hasShardWork,
+  hasRemote,
+  listBranches,
+  mergeBranch,
+  pruneWorktrees,
+  checkoutBranch,
 } from "../lib/git.js";
 import { closeIssue, updateIssueBody, addIssueLabel, removeIssueLabel } from "../lib/github.js";
 import { buildDependencyGraph, getShardsReadyToRun } from "../lib/dependencies.js";
@@ -165,11 +170,7 @@ export function ContinueSprint({
     {
       label: "Deploy",
       value: "deploy",
-      disabled: sprintStatus.counts.done !== sprintStatus.counts.total,
-      hint:
-        sprintStatus.counts.done === sprintStatus.counts.total
-          ? "All items complete"
-          : `${sprintStatus.counts.done}/${sprintStatus.counts.total} complete`,
+      hint: `${sprintStatus.counts.done}/${sprintStatus.counts.total} complete (force available)`,
     },
     {
       label: "Back",
@@ -260,6 +261,7 @@ export function ContinueSprint({
             setLoading={setLoading}
             setLoadingMessage={setLoadingMessage}
             setMessage={setMessage}
+            appendDroidOutput={appendDroidOutput}
           />
         );
       default:
@@ -1329,22 +1331,111 @@ function DeployPhase({
   setLoading,
   setLoadingMessage,
   setMessage,
-}: Omit<PhaseProps, "onStatusChange" | "appendDroidOutput">) {
+  appendDroidOutput,
+}: Omit<PhaseProps, "onStatusChange">) {
   const runDeploy = async (action: string) => {
     setLoading(true);
 
     try {
       switch (action) {
-        case "rebase":
-          setLoadingMessage("Rebasing stack...");
-          const rebaseResult = await rebaseStack("main", projectPath);
-          if (!rebaseResult.success) {
-            throw new Error(`Rebase failed on branch: ${rebaseResult.failedBranch}`);
+        case "merge-local":
+          setLoadingMessage("Merging shard branches to main project...");
+          appendDroidOutput?.("\n=== Starting Shard Merge ===\n");
+          
+          // Get all shard branches in order
+          const allBranches = await listBranches(projectPath);
+          const baseBranch = sprintStatus.sprint.branch;
+          const shardBranches = allBranches
+            .filter((b) => b.startsWith(baseBranch + "-shard-"))
+            .sort(); // Sort to get shard-00, shard-01, etc. in order
+          
+          if (shardBranches.length === 0) {
+            throw new Error("No shard branches found to merge");
           }
-          setMessage({ type: "success", text: "Stack rebased successfully" });
+          
+          // With Graphite-style stacking, the last shard has all changes
+          const lastShardBranch = shardBranches[shardBranches.length - 1]!;
+          
+          appendDroidOutput?.(`[deploy] Found ${shardBranches.length} shard branches\n`);
+          appendDroidOutput?.(`[deploy] Base branch: ${baseBranch}\n`);
+          appendDroidOutput?.(`[deploy] Last shard (has all changes): ${lastShardBranch}\n\n`);
+          
+          // Checkout base branch first
+          await checkoutBranch(baseBranch, projectPath);
+          
+          // Try squash merge from the last shard branch (contains all stacked changes)
+          setLoadingMessage(`Squash merging ${lastShardBranch}...`);
+          appendDroidOutput?.(`[deploy] Squash merging from ${lastShardBranch}...\n`);
+          
+          const { squashMerge } = await import("../lib/git.js");
+          const squashResult = await squashMerge(lastShardBranch, projectPath);
+          
+          if (!squashResult.success) {
+            if (squashResult.hasConflict) {
+              appendDroidOutput?.(`[deploy] Squash merge conflict - invoking droid to resolve...\n\n`);
+              
+              const conflictPrompt = `You are resolving a git merge conflict after a squash merge.
+
+Working directory: ${projectPath}
+Branch being merged: ${lastShardBranch}
+Target branch: ${baseBranch}
+
+Steps:
+1. Run "git status" to see the conflicting files
+2. For each conflicting file:
+   - Read the file to understand the conflict markers (<<<<<<, =======, >>>>>>>)
+   - Intelligently merge the changes - keep both sides where appropriate
+   - Remove all conflict markers
+   - Save the resolved file
+3. Run "git add ." to stage resolved files
+4. Run "git commit -m 'Merge all shards from ${lastShardBranch}'" to complete the merge
+
+Important: Do NOT abort the merge. Resolve all conflicts and complete the merge.
+Report success when done.`;
+
+              const droidResult = await invokeDroid(
+                {
+                  droid: "senior-backend-engineer",
+                  prompt: conflictPrompt,
+                  autoLevel: "high",
+                  model: config.droids.model,
+                  cwd: projectPath,
+                },
+                (chunk) => appendDroidOutput?.(chunk)
+              );
+              
+              if (!droidResult.success) {
+                throw new Error(`Failed to resolve conflicts from ${lastShardBranch}`);
+              }
+              
+              appendDroidOutput?.(`\n[deploy] Conflict resolved\n`);
+            } else {
+              throw new Error(`Squash merge failed: ${squashResult.error || "Unknown error"}`);
+            }
+          } else {
+            appendDroidOutput?.(`[deploy] Squash merge successful\n`);
+          }
+          
+          // Clean up worktrees
+          setLoadingMessage("Cleaning up worktrees...");
+          appendDroidOutput?.(`[deploy] Cleaning up worktrees...\n`);
+          await pruneWorktrees(projectPath);
+          
+          appendDroidOutput?.(`\n=== Merge Complete ===\n`);
+          appendDroidOutput?.(`All changes from ${shardBranches.length} shards merged to ${baseBranch}\n`);
+          
+          setMessage({ type: "success", text: `Merged all shards to ${baseBranch}. Test your app before running Cleanup!` });
           break;
 
         case "push":
+          setLoadingMessage("Checking for remote...");
+          const hasOrigin = await hasRemote("origin", projectPath);
+          
+          if (!hasOrigin) {
+            setMessage({ type: "info", text: "No remote origin configured. This is a local-only repo." });
+            break;
+          }
+          
           setLoadingMessage("Pushing to remote...");
           const branch = await getCurrentBranch(projectPath);
           const pushSuccess = await push("origin", branch || undefined, true, projectPath);
@@ -1354,8 +1445,59 @@ function DeployPhase({
           setMessage({ type: "success", text: "Pushed to remote" });
           break;
 
-        case "merge":
-          setMessage({ type: "info", text: "Squash merge should be done via GitHub PR" });
+        case "rebase":
+          setLoadingMessage("Checking for remote...");
+          const hasRemoteForRebase = await hasRemote("origin", projectPath);
+          
+          if (!hasRemoteForRebase) {
+            setMessage({ type: "info", text: "No remote origin configured. Rebase skipped for local-only repo." });
+            break;
+          }
+          
+          setLoadingMessage("Rebasing stack...");
+          const rebaseResult = await rebaseStack("main", projectPath);
+          if (!rebaseResult.success) {
+            throw new Error(`Rebase failed on branch: ${rebaseResult.failedBranch}`);
+          }
+          setMessage({ type: "success", text: "Stack rebased successfully" });
+          break;
+
+        case "cleanup":
+          setLoadingMessage("Cleaning up worktrees and shard branches...");
+          appendDroidOutput?.("\n=== Cleaning Up Worktrees ===\n");
+          
+          // Get all shard branches to clean up
+          const branchesToClean = await listBranches(projectPath);
+          const cleanBaseBranch = sprintStatus.sprint.branch;
+          const shardBranchesToDelete = branchesToClean.filter((b) => 
+            b.startsWith(cleanBaseBranch + "-shard-") || b === `${cleanBaseBranch}-review`
+          );
+          
+          // Remove worktree directories
+          const { removeWorktree } = await import("../lib/git.js");
+          const worktreesDir = join(projectPath, config.paths.worktrees);
+          
+          for (const branch of shardBranchesToDelete) {
+            const shardId = branch.replace(cleanBaseBranch + "-", "");
+            const worktreePath = join(worktreesDir, shardId);
+            appendDroidOutput?.(`[cleanup] Removing worktree: ${shardId}\n`);
+            await removeWorktree(worktreePath, true, projectPath);
+          }
+          
+          // Prune any stale worktree references
+          await pruneWorktrees(projectPath);
+          
+          // Delete shard branches
+          const { deleteBranch } = await import("../lib/git.js");
+          for (const branch of shardBranchesToDelete) {
+            appendDroidOutput?.(`[cleanup] Deleting branch: ${branch}\n`);
+            await deleteBranch(branch, true, projectPath);
+          }
+          
+          appendDroidOutput?.(`\n=== Cleanup Complete ===\n`);
+          appendDroidOutput?.(`Removed ${shardBranchesToDelete.length} worktrees and branches\n`);
+          
+          setMessage({ type: "success", text: `Cleaned up ${shardBranchesToDelete.length} worktrees and branches` });
           break;
 
         case "archive":
@@ -1373,9 +1515,10 @@ function DeployPhase({
   };
 
   const menuItems: MenuItem[] = [
-    { label: "Rebase Stack", value: "rebase" },
-    { label: "Push to Remote", value: "push" },
-    { label: "Squash Merge (via GitHub)", value: "merge" },
+    { label: "Merge Shards to Main", value: "merge-local", hint: "Merge all shard branches locally" },
+    { label: "Push to Remote", value: "push", hint: "Push to origin (if configured)" },
+    { label: "Rebase Stack", value: "rebase", hint: "Rebase onto origin/main" },
+    { label: "Cleanup Worktrees", value: "cleanup" },
     { label: "Archive Board", value: "archive" },
     { label: "Back", value: "back" },
   ];

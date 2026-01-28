@@ -281,6 +281,19 @@ export async function fetch(remote = "origin", cwd?: string): Promise<boolean> {
   return result.code === 0;
 }
 
+// Remote operations
+
+export async function hasRemote(remote = "origin", cwd?: string): Promise<boolean> {
+  const result = await runGit(["remote", "get-url", remote], cwd);
+  return result.code === 0;
+}
+
+export async function listRemotes(cwd?: string): Promise<string[]> {
+  const result = await runGit(["remote"], cwd);
+  if (result.code !== 0) return [];
+  return result.stdout.split("\n").filter(Boolean);
+}
+
 // Status and diff
 
 export async function hasUncommittedChanges(cwd?: string): Promise<boolean> {
@@ -422,7 +435,7 @@ export async function mergeBranch(
   branch: string,
   noFf = true,
   cwd?: string
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; error?: string; hasConflict?: boolean }> {
   const args = ["merge", branch];
   if (noFf) {
     args.push("--no-ff");
@@ -431,12 +444,40 @@ export async function mergeBranch(
   
   const result = await runGit(args, cwd);
   if (result.code !== 0) {
-    // Check for conflicts
-    if (result.stderr.includes("CONFLICT") || result.stderr.includes("conflict")) {
-      await runGit(["merge", "--abort"], cwd);
-      return { success: false, error: `Merge conflict: ${result.stderr}` };
+    const output = (result.stderr + " " + result.stdout).toLowerCase();
+    // Check for conflicts - DON'T abort, let caller handle resolution via droid
+    if (output.includes("conflict") || output.includes("automatic merge failed") || output.includes("merge conflict")) {
+      return { success: false, error: `Merge conflict: ${result.stderr}`, hasConflict: true };
     }
     return { success: false, error: result.stderr || "Merge failed" };
+  }
+  
+  return { success: true };
+}
+
+export async function squashMerge(
+  branch: string,
+  cwd?: string
+): Promise<{ success: boolean; error?: string; hasConflict?: boolean }> {
+  // Squash merge: bring all changes from branch as staged changes, then commit
+  const result = await runGit(["merge", "--squash", branch], cwd);
+  
+  if (result.code !== 0) {
+    const output = (result.stderr + " " + result.stdout).toLowerCase();
+    if (output.includes("conflict") || output.includes("automatic merge failed")) {
+      return { success: false, error: `Squash merge conflict: ${result.stderr}`, hasConflict: true };
+    }
+    return { success: false, error: result.stderr || "Squash merge failed" };
+  }
+  
+  // Commit the squashed changes
+  const commitResult = await runGit(["commit", "-m", `Merge all changes from ${branch}`], cwd);
+  if (commitResult.code !== 0) {
+    // Check if nothing to commit (already up to date)
+    if (commitResult.stdout.includes("nothing to commit") || commitResult.stderr.includes("nothing to commit")) {
+      return { success: true };
+    }
+    return { success: false, error: commitResult.stderr || "Failed to commit squash merge" };
   }
   
   return { success: true };
