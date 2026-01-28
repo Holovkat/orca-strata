@@ -4,6 +4,7 @@ import { join } from "path";
 import { Menu, type MenuItem } from "../components/Menu.js";
 import { Spinner } from "../components/Spinner.js";
 import { deriveSprintStatus } from "../lib/state.js";
+import { getAllModels, type CustomModel } from "../lib/models.js";
 import type { OrcaConfig, SprintStatus, Shard } from "../lib/types.js";
 
 interface ViewStatusProps {
@@ -13,6 +14,7 @@ interface ViewStatusProps {
   onBack: () => void;
   onEditShard?: (shard: Shard) => void;
   onProjectPathChange?: (newPath: string) => void;
+  onUpdateShardModel?: (shardId: string | string[], model: string | undefined) => void;
 }
 
 type SubScreen = "select-project" | "menu" | "board" | "issues" | "droids" | "shards";
@@ -24,12 +26,18 @@ export function ViewStatus({
   onBack,
   onEditShard,
   onProjectPathChange,
+  onUpdateShardModel,
 }: ViewStatusProps) {
   const [subScreen, setSubScreen] = useState<SubScreen>(initialSprintStatus ? "menu" : "select-project");
   const [sprintStatus, setSprintStatus] = useState<SprintStatus | null>(initialSprintStatus);
   const [existingProjects, setExistingProjects] = useState<string[]>([]);
   const [selectedProjectPath, setSelectedProjectPath] = useState<string>(projectPath);
   const [loading, setLoading] = useState(false);
+
+  // Sync local state when props change (e.g., after model update)
+  useEffect(() => {
+    setSprintStatus(initialSprintStatus);
+  }, [initialSprintStatus]);
 
   // Load existing projects from workspace
   useEffect(() => {
@@ -175,6 +183,7 @@ export function ViewStatus({
           <ShardsView
             sprintStatus={sprintStatus}
             onEditShard={onEditShard}
+            onUpdateShardModel={onUpdateShardModel}
           />
         );
       default:
@@ -317,47 +326,211 @@ function DroidsView({ sprintStatus }: { sprintStatus: SprintStatus | null }) {
 interface ShardsViewProps {
   sprintStatus: SprintStatus | null;
   onEditShard?: (shard: Shard) => void;
+  onUpdateShardModel?: (shardId: string | string[], model: string | undefined) => void;
 }
 
-function ShardsView({ sprintStatus, onEditShard }: ShardsViewProps) {
+function ShardsView({ sprintStatus, onEditShard, onUpdateShardModel }: ShardsViewProps) {
   const { stdout } = useStdout();
   const terminalHeight = stdout?.rows || 24;
   const terminalWidth = stdout?.columns || 80;
+  const [selectingModelFor, setSelectingModelFor] = useState<string | null>(null);
+  const [models, setModels] = useState<CustomModel[]>([]);
+  const [loadingModels, setLoadingModels] = useState(false);
+  const [selectedShards, setSelectedShards] = useState<Set<string>>(new Set());
+  const [batchModelSelect, setBatchModelSelect] = useState(false);
+  
+  // Load models when entering model selection
+  useEffect(() => {
+    if (selectingModelFor || batchModelSelect) {
+      setLoadingModels(true);
+      getAllModels().then((m) => {
+        setModels(m);
+        setLoadingModels(false);
+      });
+    }
+  }, [selectingModelFor, batchModelSelect]);
   
   if (!sprintStatus) {
     return <Text color="gray">No active sprint</Text>;
   }
 
-  const statusColors: Record<string, string> = {
-    "Ready to Build": "blue",
-    "In Progress": "yellow",
-    "Ready for Review": "cyan",
-    "In Review": "cyan",
-    "Ready for UAT": "magenta",
-    "UAT in Progress": "magenta",
-    "User Acceptance": "white",
-    "Done": "green",
-  };
-  
   const truncate = (text: string, max: number) => 
     text.length <= max ? text : text.slice(0, max - 3) + "...";
 
-  // Convert shards to menu items
-  const shardItems: MenuItem[] = sprintStatus.sprint.shards.map((shard) => ({
-    label: truncate(shard.title, terminalWidth - 30),
-    value: shard.id,
-    hint: `[${shard.type}] ${shard.status}`,
-  }));
+  // Format model name for display (short form for list)
+  const formatModelShort = (model: string | undefined): string => {
+    if (!model) return "";
+    if (model.includes("sonnet-4-5")) return "sonnet-4.5";
+    if (model.includes("sonnet-4")) return "sonnet-4";
+    if (model.includes("opus-4")) return "opus-4";
+    if (model.includes("haiku")) return "haiku";
+    if (model.startsWith("custom:")) return model.replace("custom:", "").slice(0, 10);
+    return model.slice(0, 12);
+  };
+
+  // Toggle shard selection
+  const toggleShardSelection = (shardId: string) => {
+    if (shardId === "__back__") return;
+    setSelectedShards(prev => {
+      const next = new Set(prev);
+      if (next.has(shardId)) {
+        next.delete(shardId);
+      } else {
+        next.add(shardId);
+      }
+      return next;
+    });
+  };
+
+  // Handle 'm' key - either single shard or batch
+  const handleModelKey = (selectedValue: string) => {
+    if (selectedValue === "__back__") return;
+    
+    if (selectedShards.size > 0) {
+      // Batch mode - apply to all selected shards
+      setBatchModelSelect(true);
+    } else {
+      // Single shard mode
+      setSelectingModelFor(selectedValue);
+    }
+  };
+
+  // Handle 'a' key - select/deselect all shards
+  const handleSelectAllKey = () => {
+    if (selectedShards.size === sprintStatus.sprint.shards.length) {
+      // All selected, deselect all
+      setSelectedShards(new Set());
+    } else {
+      // Select all shards
+      setSelectedShards(new Set(sprintStatus.sprint.shards.map(s => s.id)));
+    }
+  };
+
+  // Apply model to shards (single or batch)
+  const applyModel = (model: string | undefined) => {
+    if (batchModelSelect) {
+      // Apply to all selected shards at once
+      const shardIds = Array.from(selectedShards);
+      onUpdateShardModel?.(shardIds, model);
+      setSelectedShards(new Set());
+      setBatchModelSelect(false);
+    } else if (selectingModelFor) {
+      // Apply to single shard
+      onUpdateShardModel?.(selectingModelFor, model);
+      setSelectingModelFor(null);
+    }
+  };
+
+  // Model selection sub-menu (for single or batch)
+  if (selectingModelFor || batchModelSelect) {
+    if (loadingModels) {
+      return <Spinner message="Loading models from Factory settings..." />;
+    }
+
+    const targetShards = batchModelSelect 
+      ? Array.from(selectedShards).map(id => sprintStatus.sprint.shards.find(s => s.id === id)).filter(Boolean)
+      : [sprintStatus.sprint.shards.find(s => s.id === selectingModelFor)].filter(Boolean);
+    
+    // Group models by type
+    const builtinModels = models.filter(m => !m.id.startsWith("custom:"));
+    const customModels = models.filter(m => m.id.startsWith("custom:"));
+
+    const modelOptions: MenuItem[] = [
+      { label: "Use Default", value: "__default__", hint: "inherit from config" },
+      { label: "─── Builtin Models ───", value: "__divider1__", disabled: true },
+      ...builtinModels.map(m => ({
+        label: m.displayName,
+        value: m.id,
+        hint: "builtin",
+      })),
+      ...(customModels.length > 0 ? [
+        { label: "─── Custom Models ───", value: "__divider2__", disabled: true },
+        ...customModels.map(m => ({
+          label: m.displayName,
+          value: m.id,
+          hint: "custom",
+        })),
+      ] : []),
+      { label: "───────────", value: "__divider3__", disabled: true },
+      { label: "← Cancel", value: "__cancel__" },
+    ];
+
+    const title = batchModelSelect 
+      ? `Set Model for ${selectedShards.size} selected shards`
+      : `Set Model for: ${targetShards[0]?.title || selectingModelFor}`;
+
+    return (
+      <Box flexDirection="column" height={terminalHeight - 4}>
+        <Text bold>{title}</Text>
+        <Text color="gray" dimColor>
+          {models.length} models available ({builtinModels.length} builtin, {customModels.length} custom)
+        </Text>
+        <Box marginY={1} flexGrow={1} overflow="hidden">
+          <Menu
+            items={modelOptions}
+            onSelect={(value) => {
+              if (value === "__cancel__") {
+                setSelectingModelFor(null);
+                setBatchModelSelect(false);
+              } else if (value === "__default__") {
+                applyModel(undefined);
+              } else if (!value.startsWith("__")) {
+                applyModel(value);
+              }
+            }}
+            onCancel={() => {
+              setSelectingModelFor(null);
+              setBatchModelSelect(false);
+            }}
+          />
+        </Box>
+      </Box>
+    );
+  }
+
+  // Convert shards to menu items with model display in requested format:
+  // shardname - [modelname] - [frontend] - Ready to Build
+  const shardItems: MenuItem[] = sprintStatus.sprint.shards.map((shard) => {
+    const modelDisplay = shard.model ? `[${formatModelShort(shard.model)}]` : "";
+    const typeDisplay = `[${shard.type}]`;
+    const statusDisplay = shard.status;
+    
+    // Calculate available space for title
+    const fixedParts = ` - ${modelDisplay} - ${typeDisplay} - ${statusDisplay}`.length;
+    const availableForTitle = terminalWidth - fixedParts - 10; // 10 for checkbox and cursor
+    const title = truncate(shard.title, Math.max(20, availableForTitle));
+    
+    // Build the label: title - [model] - [type] - status
+    const parts = [title];
+    if (modelDisplay) parts.push(modelDisplay);
+    parts.push(typeDisplay);
+    parts.push(statusDisplay);
+    
+    return {
+      label: parts.join(" - "),
+      value: shard.id,
+    };
+  });
 
   shardItems.push({ label: "Back to Menu", value: "__back__" });
+
+  const selectionHint = selectedShards.size > 0 
+    ? `${selectedShards.size} selected` 
+    : "";
 
   return (
     <Box flexDirection="column" height={terminalHeight - 4}>
       <Text bold>Shards - Click/Enter to Edit ({sprintStatus.sprint.shards.length})</Text>
-      <Text color="gray" dimColor>Editing a shard will reset its status if content changes</Text>
+      <Text color="gray" dimColor>
+        Space to select, a select all, m set model
+        {selectionHint && <Text color="green"> | {selectionHint}</Text>}
+      </Text>
       <Box marginY={1} flexGrow={1} overflow="hidden">
         <Menu
           items={shardItems}
+          multiSelect={true}
+          selectedValues={selectedShards}
+          onToggleSelect={toggleShardSelection}
           onSelect={(value) => {
             if (value === "__back__") {
               return;
@@ -367,6 +540,14 @@ function ShardsView({ sprintStatus, onEditShard }: ShardsViewProps) {
               onEditShard(shard);
             }
           }}
+          onKeyPress={(key, selectedValue) => {
+            if (key === "m") {
+              handleModelKey(selectedValue);
+            } else if (key === "a") {
+              handleSelectAllKey();
+            }
+          }}
+          extraHints="a All | m Model"
         />
       </Box>
     </Box>

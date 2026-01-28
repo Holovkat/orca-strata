@@ -2,6 +2,8 @@ export type Screen =
   | "select-project"
   | "main"
   | "new-sprint"
+  | "create-project"
+  | "switch-project"
   | "continue-sprint"
   | "view-status"
   | "manual-actions"

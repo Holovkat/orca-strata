@@ -14,6 +14,8 @@ import { Spinner } from "./components/Spinner.js";
 import { ProjectSelector } from "./components/ProjectSelector.js";
 import { deriveSprintStatus, refreshStatus } from "./lib/state.js";
 import { saveConfig } from "./lib/config.js";
+import { updateShardModel } from "./lib/shard.js";
+import { join } from "path";
 import type { OrcaConfig, Screen, SprintStatus, Shard, SprintStatusCounts, RunningDroid } from "./lib/types.js";
 
 // Calculate counts from shards list
@@ -181,6 +183,39 @@ export function App({ config, projectPath, configFile }: AppProps) {
     }
   }, [sprintStatus]);
 
+  // Handle shard model update from quick menu (supports batch updates)
+  const handleUpdateShardModel = useCallback(async (shardId: string | string[], model: string | undefined) => {
+    const shardIds = Array.isArray(shardId) ? shardId : [shardId];
+    
+    // Update in-memory state
+    setSprintStatus(prev => {
+      if (!prev) return prev;
+      
+      const shardIdSet = new Set(shardIds);
+      const updatedShards = prev.sprint.shards.map(s =>
+        shardIdSet.has(s.id) ? { ...s, model } : s
+      );
+      
+      // Persist to disk for each shard (async, don't block UI)
+      for (const shard of prev.sprint.shards) {
+        if (shardIdSet.has(shard.id)) {
+          const shardFilePath = join(currentProjectPath, shard.file);
+          updateShardModel(shardFilePath, model).catch(err => {
+            console.error(`Failed to persist model for ${shard.id}:`, err);
+          });
+        }
+      }
+      
+      return {
+        ...prev,
+        sprint: {
+          ...prev.sprint,
+          shards: updatedShards,
+        },
+      };
+    });
+  }, [currentProjectPath]);
+
   // Handle shard deprecation - remove from sprint
   const handleShardDeprecated = useCallback((shardId: string) => {
     if (sprintStatus) {
@@ -244,6 +279,25 @@ export function App({ config, projectPath, configFile }: AppProps) {
             onProjectPathChange={handleProjectPathChange}
           />
         );
+      case "create-project":
+        return (
+          <NewSprint
+            config={currentConfig}
+            projectPath={currentProjectPath}
+            onBack={() => setScreen("main")}
+            onSprintCreated={handleSprintCreated}
+            onProjectPathChange={handleProjectPathChange}
+            startAtCreateProject={true}
+          />
+        );
+      case "switch-project":
+        return (
+          <ProjectSelector
+            config={currentConfig}
+            initialProjectPath={currentProjectPath}
+            onProjectSelected={handleProjectSelected}
+          />
+        );
       case "continue-sprint":
         return (
           <ContinueSprint
@@ -269,6 +323,7 @@ export function App({ config, projectPath, configFile }: AppProps) {
             onBack={() => setScreen("main")}
             onEditShard={handleEditShard}
             onProjectPathChange={handleProjectPathChange}
+            onUpdateShardModel={handleUpdateShardModel}
           />
         );
       case "shard-editor":

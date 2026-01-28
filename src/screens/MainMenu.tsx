@@ -46,6 +46,17 @@ export function MainMenu({ onSelect, sprintStatus }: MainMenuProps) {
       value: "settings",
       hint: "Configure project settings",
     },
+    { label: "─────────────", value: "divider", disabled: true },
+    {
+      label: "+ Create New Project",
+      value: "create-project",
+      hint: "Start fresh with a new project",
+    },
+    {
+      label: "Switch Project",
+      value: "switch-project",
+      hint: "Select a different project",
+    },
     {
       label: "Exit",
       value: "exit",
