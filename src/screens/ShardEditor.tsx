@@ -12,7 +12,6 @@ import { scanForSprints } from "../lib/state.js";
 import type { Shard, OrcaConfig, ColumnName } from "../lib/types.js";
 import type { ParsedShard } from "../lib/shard.js";
 import { join } from "path";
-import { spawn } from "child_process";
 
 interface ShardEditorProps {
   config: OrcaConfig;
@@ -23,7 +22,7 @@ interface ShardEditorProps {
   onShardDeprecated?: (shardId: string) => void;
 }
 
-type EditorMode = "view" | "edit-context" | "edit-task" | "edit-criteria" | "deprecate-reason" | "deprecate-review";
+type EditorMode = "view" | "view-full" | "edit-context" | "edit-task" | "edit-criteria" | "deprecate-reason" | "deprecate-review";
 
 export function ShardEditor({
   config,
@@ -42,6 +41,9 @@ export function ShardEditor({
   
   // Edit buffers (single line for simplicity)
   const [editValue, setEditValue] = useState("");
+  
+  // Scroll position for full view
+  const [scrollOffset, setScrollOffset] = useState(0);
   
   // Deprecation state
   const [deprecateReason, setDeprecateReason] = useState("");
@@ -67,44 +69,27 @@ export function ShardEditor({
     if (key.escape) {
       if (mode === "view") {
         onBack();
+      } else if (mode === "view-full") {
+        setMode("view");
+        setScrollOffset(0);
       } else {
         setMode("view");
         setEditValue("");
       }
     }
-  });
-
-  const openInEditor = () => {
-    const shardPath = join(projectPath, shard.file);
-    const editor = process.env.EDITOR || "vi";
-    
-    // Open in external editor
-    const proc = spawn(editor, [shardPath], {
-      stdio: "inherit",
-    });
-    
-    proc.on("close", async () => {
-      // Reload the shard after editing
-      setLoading(true);
-      const parsed = await readShard(shardPath);
-      if (parsed) {
-        setParsedShard(parsed);
-        
-        // Check if status should be reset
-        if (shard.status !== "Ready to Build") {
-          const newStatus: ColumnName = "Ready to Build";
-          if (shard.issueNumber) {
-            await updateIssueLabels(shard.issueNumber, newStatus);
-          }
-          onShardUpdated({ ...shard, status: newStatus });
-          setSuccess("File edited. Status reset to 'Ready to Build'.");
-        } else {
-          setSuccess("File reloaded.");
-        }
+    // Scroll handling for full view mode
+    if (mode === "view-full") {
+      if (key.upArrow || input === "k") {
+        setScrollOffset(prev => Math.max(0, prev - 1));
+      } else if (key.downArrow || input === "j") {
+        setScrollOffset(prev => prev + 1);
+      } else if (key.pageUp) {
+        setScrollOffset(prev => Math.max(0, prev - 10));
+      } else if (key.pageDown) {
+        setScrollOffset(prev => prev + 10);
       }
-      setLoading(false);
-    });
-  };
+    }
+  });
 
   const handleSave = async (field: "context" | "task" | "criteria") => {
     if (!parsedShard || !editValue.trim()) return;
@@ -363,11 +348,66 @@ Provide a concise analysis (not a JSON response).`;
     );
   }
 
-  // View mode - constrained to terminal viewport
+  // Full content view mode - scrollable
   const { stdout } = useStdout();
   const terminalHeight = stdout?.rows || 24;
   const terminalWidth = stdout?.columns || 80;
   
+  if (mode === "view-full") {
+    // Build full content as lines
+    const contentLines: Array<{ type: "header" | "label" | "text"; text: string }> = [
+      { type: "header", text: `# ${parsedShard.metadata.title}` },
+      { type: "text", text: "" },
+      { type: "label", text: "## Context" },
+      ...parsedShard.context.split("\n").map(line => ({ type: "text" as const, text: line })),
+      { type: "text", text: "" },
+      { type: "label", text: "## Task" },
+      ...parsedShard.task.split("\n").map(line => ({ type: "text" as const, text: line })),
+      { type: "text", text: "" },
+      { type: "label", text: `## Acceptance Criteria (${parsedShard.acceptanceCriteria.length})` },
+      ...parsedShard.acceptanceCriteria.map(c => ({ type: "text" as const, text: `- [ ] ${c}` })),
+      { type: "text", text: "" },
+      { type: "label", text: "## Dependencies" },
+      { type: "text", text: `Creates: ${parsedShard.metadata.creates?.join(", ") || "N/A"}` },
+      { type: "text", text: `Depends on: ${parsedShard.metadata.dependencies?.join(", ") || "None"}` },
+      { type: "text", text: `Modifies: ${parsedShard.metadata.modifies?.join(", ") || "None"}` },
+    ];
+    
+    const visibleHeight = terminalHeight - 6;
+    const maxScroll = Math.max(0, contentLines.length - visibleHeight);
+    const safeOffset = Math.min(scrollOffset, maxScroll);
+    const visibleLines = contentLines.slice(safeOffset, safeOffset + visibleHeight);
+    
+    return (
+      <Box flexDirection="column" height={terminalHeight - 1}>
+        <Box flexShrink={0} marginBottom={1}>
+          <Text bold color="cyan">{parsedShard.metadata.title}</Text>
+          <Text color="gray"> - Full View</Text>
+        </Box>
+        
+        <Box flexDirection="column" flexGrow={1} overflow="hidden">
+          {visibleLines.map((line, i) => (
+            <Text 
+              key={safeOffset + i} 
+              color={line.type === "header" ? "green" : line.type === "label" ? "cyan" : "white"}
+              bold={line.type === "header" || line.type === "label"}
+              wrap="truncate-end"
+            >
+              {line.text}
+            </Text>
+          ))}
+        </Box>
+        
+        <Box flexShrink={0} marginTop={1}>
+          <Text color="gray">
+            ↑/↓ or j/k scroll • PgUp/PgDn • Esc back • Line {safeOffset + 1}/{contentLines.length}
+          </Text>
+        </Box>
+      </Box>
+    );
+  }
+
+  // View mode - constrained to terminal viewport
   // Calculate how much space we have for content preview
   // Reserve: header (3) + status (2) + menu (9) + padding (2) = ~16 lines
   const contentHeight = Math.max(6, terminalHeight - 16);
@@ -427,7 +467,7 @@ Provide a concise analysis (not a JSON response).`;
         <Menu
           title="Actions"
           items={[
-            { label: "Open in Editor ($EDITOR)", value: "open-editor", hint: process.env.EDITOR || "vi" },
+            { label: "View Full Content", value: "view-full", hint: "Scrollable view" },
             { label: "Add to Context", value: "edit-context" },
             { label: "Add to Task", value: "edit-task" },
             { label: "Add Acceptance Criterion", value: "edit-criteria" },
@@ -438,8 +478,6 @@ Provide a concise analysis (not a JSON response).`;
           onSelect={(value) => {
             if (value === "back") {
               onBack();
-            } else if (value === "open-editor") {
-              openInEditor();
             } else {
               setMode(value as EditorMode);
             }
