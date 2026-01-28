@@ -1,6 +1,6 @@
 # Orca-Strata
 
-A menu-driven TUI orchestrator that coordinates AI-powered development workflows by invoking droids as background services.
+A menu-driven TUI orchestrator that coordinates AI-powered development workflows. Orca handles **planning and execution control** while delegating actual coding work to [Factory Droid](https://github.com/factory-ai/droid) - the AI coding agent.
 
 ## Why Orca?
 
@@ -31,6 +31,36 @@ Orca is a **model-agnostic orchestration layer**. Different shards can use diffe
 ### Who Is This For?
 
 Anyone building complex applications and features that require **managed agentic development processes**. Whether you're a solo developer multiplying your output or a team coordinating AI-assisted workflows, Orca provides the structure to ship faster without the chaos.
+
+## How It Works
+
+Orca is a **controller**, not a coding agent. It:
+
+1. **Plans work** - Breaks features into shards with dependencies
+2. **Manages isolation** - Creates git worktrees for parallel droid work
+3. **Invokes droids** - Calls `droid exec` with shard context and constraints
+4. **Tracks progress** - Monitors completion, handles failures, manages state
+5. **Orchestrates merges** - Uses Graphite-style branch stacking for clean history
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                      ORCA (TUI)                         │
+│  Planning • Worktrees • Progress • Merge • Deploy       │
+└─────────────────────────────────────────────────────────┘
+                           │
+                           │ droid exec --auto <level>
+                           ▼
+┌─────────────────────────────────────────────────────────┐
+│                   FACTORY DROID                         │
+│  Code Generation • File Editing • Git Commits           │
+└─────────────────────────────────────────────────────────┘
+```
+
+## Prerequisites
+
+- [Factory Droid CLI](https://docs.factory.ai) installed and configured
+- Git 2.20+ (for worktree support)
+- Bun runtime
 
 ## Installation
 
@@ -119,7 +149,7 @@ stateDiagram-v2
 | **Review** | Code review, lint, typecheck, build verification | All checks pass |
 | **UAT** | Automated browser testing | Tests pass |
 | **User Acceptance** | Manual user verification | User approves |
-| **Deploy** | Rebase stack, push, merge PRs | Merged to main |
+| **Deploy** | Merge shards, push, cleanup | Merged to main |
 
 ## Shard Lifecycle
 
@@ -205,6 +235,51 @@ This allows:
 - Clean rebase operations
 - Sequential PR merging
 
+## Droid Integration
+
+Orca uses Factory Droid's stock CLI - no custom agents or plugins required.
+
+### How Droids Are Invoked
+
+When a shard is ready to build, Orca:
+
+```bash
+droid exec --auto high --model claude-sonnet-4-5-20250929 \
+  --cwd /path/to/worktree \
+  "Implement shard: <title>. Read shard file for requirements..."
+```
+
+The `--auto` level controls how much autonomy the droid has:
+- `low` - Asks before most actions
+- `medium` - Asks before destructive actions
+- `high` - Fully autonomous (recommended for isolated worktrees)
+
+### Shard Context
+
+Each droid receives:
+- Shard file path with requirements and acceptance criteria
+- Isolated worktree directory to work in
+- Model override (per-shard or from config)
+- Instructions to commit when complete
+
+### Droid Assignment
+
+Droids are assigned based on shard type:
+
+| Shard Type | Assigned Droid |
+|------------|----------------|
+| `backend` | senior-backend-engineer |
+| `frontend` | frontend-developer |
+| `fullstack` | fullstack-developer |
+| `docs` | documentation-specialist |
+
+### Output Streaming
+
+Droid output streams to the TUI in real-time. You can:
+- Watch progress as the droid works
+- Press `Esc` to minimize and continue working
+- View running droids from the menu
+
 ## GitHub Integration
 
 ### Issues
@@ -252,17 +327,6 @@ branching:
   pattern: "feature/{sprint}-{shard}"
   stack_from: "previous"   # previous | main
 ```
-
-## Droid Assignment
-
-Droids are assigned based on shard type:
-
-| Shard Type | Assigned Droid |
-|------------|----------------|
-| `backend` | senior-backend-engineer |
-| `frontend` | frontend-developer |
-| `fullstack` | fullstack-developer |
-| `docs` | documentation-specialist |
 
 ## Development
 
