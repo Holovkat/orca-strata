@@ -84,7 +84,6 @@ export function DroidChat({
           model: config.droids.model,
           cwd: projectPath,
         },
-        config,
         (chunk) => {
           setCurrentResponse(prev => prev + chunk);
         }

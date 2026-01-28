@@ -225,9 +225,9 @@ function InvokeDroidScreen({
           droid: selectedDroid,
           prompt,
           autoLevel: config.droids.auto_level,
+          model: config.droids.model,
           cwd: projectPath,
         },
-        config,
         (chunk) => appendDroidOutput(chunk)
       );
 

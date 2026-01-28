@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import { Box, Text, useInput, useStdout } from "ink";
 import { Menu, type MenuItem } from "../components/Menu.js";
 import { Spinner } from "../components/Spinner.js";
@@ -365,6 +365,34 @@ function BuildPhase({
 }: BuildPhaseProps) {
   const [runMode, setRunMode] = React.useState<"auto" | "interactive">("auto");
   const [workMode, setWorkMode] = React.useState<"skip" | "rebuild">("skip");
+  // Track which shards have existing work (commits on their branch)
+  const [shardsWithWork, setShardsWithWork] = React.useState<Map<string, number>>(new Map());
+  const [checkingWork, setCheckingWork] = React.useState(true);
+  
+  // Check for existing work on all shards when component mounts
+  useEffect(() => {
+    const checkAllShards = async () => {
+      setCheckingWork(true);
+      const workMap = new Map<string, number>();
+      
+      for (const shard of sprintStatus.sprint.shards) {
+        const branchName = `${sprintStatus.sprint.branch}-${shard.id}`;
+        try {
+          const existingWork = await hasShardWork(branchName, sprintStatus.sprint.branch, projectPath);
+          if (existingWork.hasCommits) {
+            workMap.set(shard.id, existingWork.commitCount);
+          }
+        } catch {
+          // Ignore errors
+        }
+      }
+      
+      setShardsWithWork(workMap);
+      setCheckingWork(false);
+    };
+    
+    checkAllShards();
+  }, [sprintStatus.sprint.shards, sprintStatus.sprint.branch, projectPath]);
   
   const graph = buildDependencyGraph(sprintStatus.sprint.shards);
   const completedIds = new Set(
@@ -376,6 +404,10 @@ function BuildPhase({
 
   const readyShards = getShardsReadyToRun(graph, completedIds, inProgressIds);
   const readyShardObjects = sprintStatus.sprint.shards.filter((s) => readyShards.includes(s.id));
+  
+  // Count shards with existing work vs truly ready
+  const readyWithWork = readyShardObjects.filter(s => shardsWithWork.has(s.id));
+  const readyWithoutWork = readyShardObjects.filter(s => !shardsWithWork.has(s.id));
 
   // Handle Shift+Tab to toggle modes
   useInput((input, key) => {
@@ -503,10 +535,9 @@ Begin implementation.`;
           droid: droidName,
           prompt,
           autoLevel: "high",
-          model: shard.model, // Use shard-specific model if set
+          model: shard.model || config.droids.model, // Use shard-specific model if set, else config default
           cwd: worktreePath,
         },
-        config,
         (chunk) => appendDroidOutput?.(chunk)
       );
 
@@ -517,10 +548,20 @@ Begin implementation.`;
         s.id === shard.id ? { ...s, status: newStatus } : s
       );
 
-      // Remove worktree if successful
-      if (result.success) {
-        await removeWorktree(worktreePath, true, projectPath);
+      // Update GitHub issue labels if shard has an issue
+      if (shard.issueNumber) {
+        try {
+          await import("../lib/github.js").then(({ updateIssueLabels }) =>
+            updateIssueLabels(shard.issueNumber!, newStatus)
+          );
+          appendDroidOutput?.(`[Updated GitHub issue #${shard.issueNumber} to ${newStatus}]\n`);
+        } catch (err) {
+          appendDroidOutput?.(`[Warning: Failed to update GitHub issue #${shard.issueNumber}]\n`);
+        }
       }
+
+      // Note: We do NOT remove the worktree - it contains the committed work
+      // The worktree will be used in the review phase for merging
 
       onStatusChange({
         ...sprintStatus,
@@ -542,29 +583,6 @@ Begin implementation.`;
 
     setLoading(false);
   };
-
-  const menuItems: MenuItem[] = [
-    {
-      label: `Start All Ready (${runMode === "auto" ? "Auto" : "Interactive"})`,
-      value: "start-all",
-      hint: `${readyShardObjects.length} shards ready`,
-      disabled: readyShardObjects.length === 0,
-    },
-    ...readyShardObjects.map((shard) => ({
-      label: shard.title,
-      value: `run-${shard.id}`,
-      hint: `${shard.type}`,
-    })),
-    {
-      label: "View Active Droids",
-      value: "view-droids",
-      hint: `${sprintStatus.activeDroids.length} running`,
-    },
-    {
-      label: "Back",
-      value: "back",
-    },
-  ];
 
   const handleSelect = async (value: string) => {
     if (value === "back") {
@@ -684,6 +702,37 @@ Let's start by reviewing the requirements and then implementing step by step.`;
     }
   };
 
+  // Build menu items with work status hints
+  const menuItems: MenuItem[] = [
+    {
+      label: `Start All Ready (${runMode === "auto" ? "Auto" : "Interactive"})`,
+      value: "start-all",
+      hint: workMode === "skip" 
+        ? `${readyWithoutWork.length} to run, ${readyWithWork.length} will skip`
+        : `${readyShardObjects.length} shards (rebuild mode)`,
+      disabled: readyShardObjects.length === 0,
+    },
+    ...readyShardObjects.map((shard) => {
+      const workCount = shardsWithWork.get(shard.id);
+      return {
+        label: shard.title,
+        value: `run-${shard.id}`,
+        hint: workCount 
+          ? `${shard.type} • ${workCount} commit${workCount > 1 ? "s" : ""} (${workMode === "skip" ? "will skip" : "will rebuild"})`
+          : shard.type,
+      };
+    }),
+    {
+      label: "View Active Droids",
+      value: "view-droids",
+      hint: `${sprintStatus.activeDroids.length} running`,
+    },
+    {
+      label: "Back",
+      value: "back",
+    },
+  ];
+
   return (
     <Box flexDirection="column">
       <Box marginBottom={1}>
@@ -698,9 +747,18 @@ Let's start by reviewing the requirements and then implementing step by step.`;
         </Text>
       </Box>
       <Box marginBottom={1}>
-        <Text>Ready: {readyShardObjects.length}</Text>
-        <Text> | In Progress: {sprintStatus.counts.inProgress}</Text>
-        <Text> | Complete: {sprintStatus.counts.readyForReview}</Text>
+        {checkingWork ? (
+          <Text color="gray">Checking for existing work...</Text>
+        ) : (
+          <>
+            <Text>Ready: {readyShardObjects.length}</Text>
+            {shardsWithWork.size > 0 && workMode === "skip" && (
+              <Text color="yellow"> ({readyWithWork.length} have work, will skip)</Text>
+            )}
+            <Text> | In Progress: {sprintStatus.counts.inProgress}</Text>
+            <Text> | Complete: {sprintStatus.counts.readyForReview}</Text>
+          </>
+        )}
       </Box>
       <Menu items={menuItems} onSelect={handleSelect} />
       <Box marginTop={1} flexDirection="column">
@@ -897,9 +955,9 @@ Return: APPROVED or CHANGES_REQUESTED with details.`;
         droid: droidName,
         prompt,
         autoLevel: "low",
+        model: config.droids.model,
         cwd: reviewPath, // Run in review worktree
       },
-      config,
       (chunk) => appendDroidOutput?.(chunk)
     );
 
@@ -925,6 +983,81 @@ Return: APPROVED or CHANGES_REQUESTED with details.`;
   };
 
   const inReview = sprintStatus.sprint.shards.filter((s) => s.status === "In Review");
+  
+  // Check if all reviewed shards passed (ready to finalize)
+  const allPassed = inReview.length > 0 && 
+    Array.from(mergeResults.values()).every(r => r.merged && r.buildPassed) &&
+    mergeResults.size === readyForReview.length + inReview.length;
+
+  const finalizeAndPush = async () => {
+    setLoading(true);
+    setLoadingMessage("Finalizing review and pushing to sprint branch...");
+    appendDroidOutput?.("\n=== Finalizing Review ===\n");
+    
+    const reviewPath = join(projectPath, config.paths.worktrees, "review");
+    
+    // Enable git debug
+    setGitDebugCallback((msg) => appendDroidOutput?.(msg));
+    
+    // Import and call finalizeReview
+    const { finalizeReview, cleanupShardWorktrees } = await import("../lib/git.js");
+    
+    const result = await finalizeReview(
+      sprintStatus.sprint.branch,
+      reviewPath,
+      projectPath
+    );
+    
+    if (!result.success) {
+      setGitDebugCallback(null);
+      setMessage({ type: "error", text: `Failed to finalize: ${result.error}` });
+      setLoading(false);
+      return;
+    }
+    
+    appendDroidOutput?.("[finalize] Sprint branch updated and pushed\n");
+    
+    // Clean up shard worktrees
+    const shardIds = inReview.map(s => s.id);
+    appendDroidOutput?.(`[finalize] Cleaning up ${shardIds.length} shard worktree(s)...\n`);
+    await cleanupShardWorktrees(shardIds, join(projectPath, config.paths.worktrees), projectPath);
+    
+    setGitDebugCallback(null);
+    
+    // Update shard statuses to Ready for UAT
+    const updatedShards = sprintStatus.sprint.shards.map((s) => {
+      if (s.status === "In Review") {
+        return { ...s, status: "Ready for UAT" as ColumnName };
+      }
+      return s;
+    });
+    
+    // Update GitHub issue labels
+    for (const shard of inReview) {
+      if (shard.issueNumber) {
+        try {
+          const { updateIssueLabels } = await import("../lib/github.js");
+          await updateIssueLabels(shard.issueNumber, "Ready for UAT");
+          appendDroidOutput?.(`[finalize] Updated issue #${shard.issueNumber} to Ready for UAT\n`);
+        } catch {
+          appendDroidOutput?.(`[finalize] Warning: Failed to update issue #${shard.issueNumber}\n`);
+        }
+      }
+    }
+    
+    onStatusChange({
+      ...sprintStatus,
+      sprint: { ...sprintStatus.sprint, shards: updatedShards },
+      counts: calculateCounts(updatedShards),
+    });
+    
+    appendDroidOutput?.("\n=== Review Finalized Successfully ===\n");
+    appendDroidOutput?.("Code has been pushed to the sprint branch.\n");
+    appendDroidOutput?.("Shards are now Ready for UAT.\n");
+    
+    setMessage({ type: "success", text: "Review finalized! Code pushed to sprint branch. Ready for UAT." });
+    setLoading(false);
+  };
 
   const menuItems: MenuItem[] = [
     {
@@ -944,6 +1077,12 @@ Return: APPROVED or CHANGES_REQUESTED with details.`;
       value: "code-review",
       hint: `${inReview.length} in review`,
       disabled: inReview.length === 0,
+    },
+    {
+      label: "Finalize & Push to Sprint Branch",
+      value: "finalize",
+      hint: allPassed ? `Push ${inReview.length} shard(s) to ${sprintStatus.sprint.branch}` : "Run reviews first",
+      disabled: !allPassed && inReview.length === 0,
     },
     {
       label: "Back",
@@ -969,6 +1108,15 @@ Return: APPROVED or CHANGES_REQUESTED with details.`;
             ))}
           </Box>
         )}
+        {inReview.length > 0 && (
+          <Box marginTop={1}>
+            <Text color={allPassed ? "green" : "gray"}>
+              {allPassed 
+                ? "All reviews passed - ready to finalize and push!" 
+                : "Complete reviews before finalizing"}
+            </Text>
+          </Box>
+        )}
       </Box>
       <Menu
         items={menuItems}
@@ -981,6 +1129,8 @@ Return: APPROVED or CHANGES_REQUESTED with details.`;
             await runDroidReview(inReview[0], "implementation");
           } else if (value === "code-review" && inReview[0]) {
             await runDroidReview(inReview[0], "code");
+          } else if (value === "finalize") {
+            await finalizeAndPush();
           }
         }}
       />
@@ -1026,9 +1176,9 @@ OVERALL: PASS/FAIL`;
         droid: "uat-runner",
         prompt,
         autoLevel: "high",
+        model: config.droids.model,
         cwd: projectPath,
       },
-      config,
       (chunk) => appendDroidOutput?.(chunk)
     );
 

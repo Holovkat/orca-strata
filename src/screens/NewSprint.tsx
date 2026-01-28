@@ -319,9 +319,9 @@ Return ONLY the JSON array, no other text.`;
           droid: "technical-analyst",
           prompt,
           autoLevel: "low",
+          model: config.droids.model,
           cwd: selectedProjectPath,
         },
-        config,
         (chunk) => setDroidOutput((prev) => prev + chunk)
       );
 
@@ -429,9 +429,9 @@ Return ONLY the JSON object, no other text.`;
           droid: "technical-analyst",
           prompt,
           autoLevel: "low",
+          model: config.droids.model,
           cwd: selectedProjectPath,
         },
-        config,
         (chunk) => setDroidOutput((prev) => prev + chunk)
       );
 
@@ -791,9 +791,9 @@ Include file references like: See [Design Tokens](../docs/design/ui-ux-guideline
           droid: "technical-analyst",
           prompt,
           autoLevel: "low",
+          model: config.droids.model,
           cwd: selectedProjectPath,
         },
-        config,
         (chunk) => setDroidOutput((prev) => prev + chunk)
       );
 
@@ -871,9 +871,9 @@ Otherwise just say "ALIGNED - No changes needed."`;
           droid: "technical-analyst",
           prompt,
           autoLevel: "low",
+          model: config.droids.model,
           cwd: selectedProjectPath,
         },
-        config,
         (chunk) => setDroidOutput((prev) => prev + chunk)
       );
 
@@ -1001,8 +1001,8 @@ Return ONLY the JSON array, no other text.`;
           droid: "technical-analyst",
           prompt,
           autoLevel: "low",
+          model: config.droids.model,
         },
-        config,
         (chunk) => setDroidOutput((prev) => prev + chunk)
       );
 
