@@ -8,12 +8,13 @@ import { ManualActions } from "./screens/ManualActions.js";
 import { Settings } from "./screens/Settings.js";
 import { ShardEditor } from "./screens/ShardEditor.js";
 import { DroidChat } from "./screens/DroidChat.js";
+import { DroidViewer } from "./screens/DroidViewer.js";
 import { Header } from "./components/Header.js";
 import { Spinner } from "./components/Spinner.js";
 import { ProjectSelector } from "./components/ProjectSelector.js";
 import { deriveSprintStatus, refreshStatus } from "./lib/state.js";
 import { saveConfig } from "./lib/config.js";
-import type { OrcaConfig, Screen, SprintStatus, Shard, SprintStatusCounts } from "./lib/types.js";
+import type { OrcaConfig, Screen, SprintStatus, Shard, SprintStatusCounts, RunningDroid } from "./lib/types.js";
 
 // Calculate counts from shards list
 function calculateCounts(shards: Shard[]): SprintStatusCounts {
@@ -45,6 +46,44 @@ export function App({ config, projectPath, configFile }: AppProps) {
   const [loading, setLoading] = useState(false);
   const [selectedShard, setSelectedShard] = useState<Shard | null>(null);
   const [chatPrompt, setChatPrompt] = useState<string | undefined>(undefined);
+  
+  // Track running droids with their output buffers
+  const [runningDroids, setRunningDroids] = useState<RunningDroid[]>([]);
+  const [viewingDroidId, setViewingDroidId] = useState<string | undefined>(undefined);
+
+  // Add a new running droid
+  const addRunningDroid = useCallback((droid: RunningDroid) => {
+    setRunningDroids(prev => [...prev, droid]);
+  }, []);
+
+  // Update a running droid's output
+  const appendDroidOutput = useCallback((shardId: string, chunk: string) => {
+    setRunningDroids(prev => prev.map(d => 
+      d.shardId === shardId 
+        ? { ...d, output: d.output + chunk }
+        : d
+    ));
+  }, []);
+
+  // Update a running droid's status
+  const updateDroidStatus = useCallback((shardId: string, status: "running" | "complete" | "failed", exitCode?: number) => {
+    setRunningDroids(prev => prev.map(d => 
+      d.shardId === shardId 
+        ? { ...d, status, completedAt: status !== "running" ? new Date() : undefined, exitCode }
+        : d
+    ));
+  }, []);
+
+  // Remove completed droids (cleanup)
+  const clearCompletedDroids = useCallback(() => {
+    setRunningDroids(prev => prev.filter(d => d.status === "running"));
+  }, []);
+
+  // View a specific droid's output
+  const viewDroid = useCallback((shardId: string) => {
+    setViewingDroidId(shardId);
+    setScreen("droid-viewer");
+  }, []);
 
   // Load project state when project is selected
   const loadProjectState = useCallback(async (path: string) => {
@@ -212,6 +251,11 @@ export function App({ config, projectPath, configFile }: AppProps) {
             onBack={() => setScreen("main")}
             onStatusChange={handleSprintStatusChange}
             onStartChat={handleStartChat}
+            runningDroids={runningDroids}
+            onAddRunningDroid={addRunningDroid}
+            onAppendDroidOutput={appendDroidOutput}
+            onUpdateDroidStatus={updateDroidStatus}
+            onViewDroid={viewDroid}
           />
         );
       case "view-status":
@@ -270,6 +314,18 @@ export function App({ config, projectPath, configFile }: AppProps) {
             config={currentConfig}
             onBack={() => setScreen("main")}
             onConfigChange={handleConfigChange}
+          />
+        );
+      case "droid-viewer":
+        return (
+          <DroidViewer
+            runningDroids={runningDroids}
+            selectedDroidId={viewingDroidId}
+            onBack={() => {
+              setViewingDroidId(undefined);
+              setScreen("continue-sprint");
+            }}
+            onSelectDroid={setViewingDroidId}
           />
         );
       default:

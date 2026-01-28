@@ -16,7 +16,7 @@ import {
 import { closeIssue, updateIssueBody, addIssueLabel, removeIssueLabel } from "../lib/github.js";
 import { buildDependencyGraph, getShardsReadyToRun } from "../lib/dependencies.js";
 import { readShard } from "../lib/shard.js";
-import type { OrcaConfig, SprintStatus, Phase, Shard, ActiveDroid, ColumnName } from "../lib/types.js";
+import type { OrcaConfig, SprintStatus, Phase, Shard, ActiveDroid, ColumnName, RunningDroid } from "../lib/types.js";
 import { join } from "path";
 
 interface ContinueSprintProps {
@@ -26,6 +26,12 @@ interface ContinueSprintProps {
   onBack: () => void;
   onStatusChange: (status: SprintStatus) => void;
   onStartChat?: (shard: Shard, prompt?: string) => void;
+  // Running droids management (for background execution)
+  runningDroids?: RunningDroid[];
+  onAddRunningDroid?: (droid: RunningDroid) => void;
+  onAppendDroidOutput?: (shardId: string, chunk: string) => void;
+  onUpdateDroidStatus?: (shardId: string, status: "running" | "complete" | "failed", exitCode?: number) => void;
+  onViewDroid?: (shardId: string) => void;
 }
 
 type SubScreen = "menu" | "build" | "review" | "uat" | "user-acceptance" | "deploy";
