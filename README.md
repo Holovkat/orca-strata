@@ -27,11 +27,20 @@ Orca is a **controller**, not a coding agent. It:
 │  Planning • Worktrees • Progress • Merge • Deploy       │
 └─────────────────────────────────────────────────────────┘
                            │
-                           │ droid exec --auto <level>
+                           │ droid exec --input-format stream-jsonrpc
+                           │            --output-format stream-jsonrpc
                            ▼
 ┌─────────────────────────────────────────────────────────┐
 │                   FACTORY DROID                         │
 │  Code Generation • File Editing • Git Commits           │
+└─────────────────────────────────────────────────────────┘
+                           ▲
+                           │ JSON-RPC messages
+                           │ (prompts, responses, tool results)
+                           ▼
+┌─────────────────────────────────────────────────────────┐
+│                   DROID ADAPTER                         │
+│  Session Management • Streaming • Permission Handling   │
 └─────────────────────────────────────────────────────────┘
 ```
 
