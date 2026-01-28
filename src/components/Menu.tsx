@@ -11,10 +11,11 @@ export interface MenuItem {
 interface MenuProps {
   items: MenuItem[];
   onSelect: (value: string) => void;
+  onCancel?: () => void;
   title?: string;
 }
 
-export function Menu({ items, onSelect, title }: MenuProps) {
+export function Menu({ items, onSelect, onCancel, title }: MenuProps) {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const enabledItems = items.filter((item) => !item.disabled);
 
@@ -28,6 +29,8 @@ export function Menu({ items, onSelect, title }: MenuProps) {
       if (item) {
         onSelect(item.value);
       }
+    } else if (key.escape && onCancel) {
+      onCancel();
     }
   });
 
@@ -54,7 +57,7 @@ export function Menu({ items, onSelect, title }: MenuProps) {
         );
       })}
       <Box marginTop={1}>
-        <Text color="gray">↑↓ Navigate • Enter Select • q Quit</Text>
+        <Text color="gray">↑↓ Navigate • Enter Select{onCancel ? " • Esc Back" : ""} • q Quit</Text>
       </Box>
     </Box>
   );
