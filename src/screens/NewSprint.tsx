@@ -108,6 +108,7 @@ export function NewSprint({
   // Existing shards detection
   const [existingShards, setExistingShards] = useState<ShardDraft[]>([]);
   const [existingSprintName, setExistingSprintName] = useState<string>("");
+  const [projectShardCounts, setProjectShardCounts] = useState<Map<string, { count: number; sprint: string }>>(new Map());
 
   // Load existing projects from workspace
   useEffect(() => {
@@ -120,19 +121,43 @@ export function NewSprint({
         const { readdir, stat } = await import("fs/promises");
         const entries = await readdir(projectsDir);
         const dirs: string[] = [];
+        const shardCounts = new Map<string, { count: number; sprint: string }>();
         
         for (const entry of entries) {
           const fullPath = join(projectsDir, entry);
           const stats = await stat(fullPath).catch(() => null);
           if (stats?.isDirectory() && !entry.startsWith(".")) {
             dirs.push(entry);
+            
+            // Check for shards in this project
+            try {
+              const sprintsDir = join(fullPath, "features", "sprints");
+              const sprintEntries = await readdir(sprintsDir).catch(() => []);
+              
+              for (const sprintEntry of sprintEntries) {
+                const sprintPath = join(sprintsDir, sprintEntry);
+                const sprintStat = await stat(sprintPath).catch(() => null);
+                if (sprintStat?.isDirectory() && !sprintEntry.startsWith(".")) {
+                  const shardFiles = await readdir(sprintPath).catch(() => []);
+                  const mdFiles = shardFiles.filter(f => f.endsWith(".md") && !f.startsWith("."));
+                  if (mdFiles.length > 0) {
+                    shardCounts.set(entry, { count: mdFiles.length, sprint: sprintEntry });
+                    break; // Use the first sprint found with shards
+                  }
+                }
+              }
+            } catch {
+              // No sprints folder or other error
+            }
           }
         }
         
         setExistingProjects(dirs);
+        setProjectShardCounts(shardCounts);
       } catch {
         // projects folder doesn't exist yet
         setExistingProjects([]);
+        setProjectShardCounts(new Map());
       }
     };
     
@@ -1083,11 +1108,16 @@ ${shard.acceptanceCriteria.map((c) => `- [ ] ${c}`).join("\n")}
       case "select-project":
         
         const projectMenuItems: MenuItem[] = [
-          ...existingProjects.map(p => ({
-            label: p,
-            value: `existing:${p}`,
-            hint: "existing project",
-          })),
+          ...existingProjects.map(p => {
+            const shardInfo = projectShardCounts.get(p);
+            return {
+              label: shardInfo ? `${p} 📝` : p,
+              value: `existing:${p}`,
+              hint: shardInfo 
+                ? `${shardInfo.count} shards in "${shardInfo.sprint}"` 
+                : "existing project",
+            };
+          }),
           {
             label: "+ Create New Project",
             value: "new",
