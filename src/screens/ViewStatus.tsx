@@ -1,6 +1,9 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Box, Text, useInput } from "ink";
+import { join } from "path";
 import { Menu, type MenuItem } from "../components/Menu.js";
+import { Spinner } from "../components/Spinner.js";
+import { deriveSprintStatus } from "../lib/state.js";
 import type { OrcaConfig, SprintStatus, Shard } from "../lib/types.js";
 
 interface ViewStatusProps {
@@ -11,26 +14,72 @@ interface ViewStatusProps {
   onEditShard?: (shard: Shard) => void;
 }
 
-type SubScreen = "menu" | "board" | "issues" | "droids" | "shards";
+type SubScreen = "select-project" | "menu" | "board" | "issues" | "droids" | "shards";
 
 export function ViewStatus({
   config,
   projectPath,
-  sprintStatus,
+  sprintStatus: initialSprintStatus,
   onBack,
   onEditShard,
 }: ViewStatusProps) {
-  const [subScreen, setSubScreen] = useState<SubScreen>("menu");
+  const [subScreen, setSubScreen] = useState<SubScreen>(initialSprintStatus ? "menu" : "select-project");
+  const [sprintStatus, setSprintStatus] = useState<SprintStatus | null>(initialSprintStatus);
+  const [existingProjects, setExistingProjects] = useState<string[]>([]);
+  const [selectedProjectPath, setSelectedProjectPath] = useState<string>(projectPath);
+  const [loading, setLoading] = useState(false);
+
+  // Load existing projects from workspace
+  useEffect(() => {
+    const loadProjects = async () => {
+      const projectsDir = config.workspace_root 
+        ? join(config.workspace_root, "projects")
+        : join(projectPath, "projects");
+      
+      try {
+        const { readdir, stat } = await import("fs/promises");
+        const entries = await readdir(projectsDir);
+        const dirs: string[] = [];
+        
+        for (const entry of entries) {
+          const fullPath = join(projectsDir, entry);
+          const stats = await stat(fullPath).catch(() => null);
+          if (stats?.isDirectory() && !entry.startsWith(".")) {
+            dirs.push(entry);
+          }
+        }
+        
+        setExistingProjects(dirs);
+      } catch {
+        setExistingProjects([]);
+      }
+    };
+    
+    loadProjects();
+  }, [config.workspace_root, projectPath]);
 
   useInput((input, key) => {
     if (key.escape) {
-      if (subScreen === "menu") {
+      if (subScreen === "menu" || subScreen === "select-project") {
         onBack();
       } else {
         setSubScreen("menu");
       }
     }
   });
+
+  const loadProjectStatus = async (path: string) => {
+    setLoading(true);
+    setSelectedProjectPath(path);
+    const status = await deriveSprintStatus(path, config);
+    setSprintStatus(status);
+    setLoading(false);
+    setSubScreen(status ? "menu" : "menu"); // Go to menu even if no status
+  };
+
+  const projectsDir = config.workspace_root 
+    ? join(config.workspace_root, "projects")
+    : join(projectPath, "projects");
 
   const menuItems: MenuItem[] = [
     {
@@ -64,7 +113,54 @@ export function ViewStatus({
   ];
 
   const renderSubScreen = () => {
+    if (loading) {
+      return <Spinner message="Loading project status..." />;
+    }
+
     switch (subScreen) {
+      case "select-project":
+        const projectMenuItems: MenuItem[] = [
+          ...existingProjects.map(p => ({
+            label: p,
+            value: `project:${p}`,
+            hint: "existing project",
+          })),
+          {
+            label: "Use Current Directory",
+            value: "current",
+            hint: projectPath,
+          },
+          {
+            label: "Back",
+            value: "back",
+          },
+        ];
+
+        return (
+          <Box flexDirection="column">
+            <Text bold color="cyan">Select Project to View</Text>
+            <Text color="gray" dimColor>Projects folder: {projectsDir}</Text>
+            {existingProjects.length === 0 && (
+              <Text color="yellow" dimColor>No existing projects found</Text>
+            )}
+            <Box marginTop={1}>
+              <Menu 
+                items={projectMenuItems} 
+                onSelect={(value) => {
+                  if (value === "back") {
+                    onBack();
+                  } else if (value === "current") {
+                    loadProjectStatus(projectPath);
+                  } else if (value.startsWith("project:")) {
+                    const projectName = value.replace("project:", "");
+                    loadProjectStatus(join(projectsDir, projectName));
+                  }
+                }}
+                onCancel={onBack}
+              />
+            </Box>
+          </Box>
+        );
       case "board":
         return <BoardView sprintStatus={sprintStatus} />;
       case "issues":
@@ -80,17 +176,23 @@ export function ViewStatus({
         );
       default:
         return (
-          <Menu
-            items={menuItems}
-            onSelect={(value) => {
-              if (value === "back") {
-                onBack();
-              } else {
-                setSubScreen(value as SubScreen);
-              }
-            }}
-            title="View Status"
-          />
+          <Box flexDirection="column">
+            {sprintStatus && (
+              <Text color="green" dimColor>Project: {selectedProjectPath.split("/").pop()}</Text>
+            )}
+            <Menu
+              items={menuItems}
+              onSelect={(value) => {
+                if (value === "back") {
+                  onBack();
+                } else {
+                  setSubScreen(value as SubScreen);
+                }
+              }}
+              onCancel={onBack}
+              title="View Status"
+            />
+          </Box>
         );
     }
   };
