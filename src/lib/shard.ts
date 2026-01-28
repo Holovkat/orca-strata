@@ -45,6 +45,7 @@ export interface ShardMetadata {
   linkedDocs: string[];
   issueNumber?: number;
   status: ColumnName;
+  model?: string;
 }
 
 export interface ParsedShard {
@@ -109,6 +110,7 @@ export function parseShard(content: string): ParsedShard {
   const modifies: string[] = [];
   let issueNumber: number | undefined;
   let status: ColumnName = "Ready to Build";
+  let model: string | undefined;
   
   let currentSection = "";
   
@@ -175,6 +177,12 @@ export function parseShard(content: string): ParsedShard {
           issueNumber = parseInt(issueMatch[1]);
         }
         break;
+        
+      case "model override":
+        if (line.trim() && !line.startsWith("<!--")) {
+          model = line.trim();
+        }
+        break;
     }
   }
   
@@ -191,6 +199,7 @@ export function parseShard(content: string): ParsedShard {
       linkedDocs: requiredReading,
       issueNumber,
       status,
+      model,
     },
     requiredReading,
     context: context.trim(),
@@ -326,6 +335,11 @@ export async function updateShard(
     .map((a) => `- [ ] ${a}`)
     .join("\n");
 
+  // Model override section (only include if model is set)
+  const modelSection = shard.metadata.model 
+    ? `\n## Model Override\n${shard.metadata.model}\n`
+    : "";
+
   const content = `# ${shard.metadata.title}
 
 ## Required Reading
@@ -353,9 +367,33 @@ ${acceptanceCriteriaStr}
 
 ## Linked Issue
 GitHub: #${shard.metadata.issueNumber || "TBD"}
-`;
+${modelSection}`;
 
   await writeFile(filePath, content, "utf-8");
+}
+
+/**
+ * Update just the model override in a shard file without rewriting everything
+ */
+export async function updateShardModel(
+  filePath: string,
+  model: string | undefined
+): Promise<void> {
+  const content = await readFile(filePath, "utf-8");
+  
+  // Remove existing model override section if present
+  let newContent = content.replace(/\n## Model Override\n[^\n]+\n?/g, "");
+  
+  // Add model override section at the end if model is set
+  if (model) {
+    // Ensure there's a newline at the end before adding
+    if (!newContent.endsWith("\n")) {
+      newContent += "\n";
+    }
+    newContent += `\n## Model Override\n${model}\n`;
+  }
+  
+  await writeFile(filePath, newContent, "utf-8");
 }
 
 export function shardToIssueBody(shard: ParsedShard): string {

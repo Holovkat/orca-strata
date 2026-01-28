@@ -10,9 +10,10 @@ import { PrdQA, type PrdAnswers } from "../components/PrdQA.js";
 import { invokeDroid } from "../lib/droid.js";
 import { createProject, createIssue, addIssueToProject } from "../lib/github.js";
 import { createStackedBranch, getCurrentBranch } from "../lib/git.js";
-import { createShard, shardToIssueBody, type ParsedShard } from "../lib/shard.js";
+import { createShard, shardToIssueBody, type ParsedShard, updateShardModel } from "../lib/shard.js";
 import { buildDependencyGraph } from "../lib/dependencies.js";
 import { scaffoldProject, hasPrd, updatePrdFromAnswers } from "../lib/scaffold.js";
+import { getAllModels, type CustomModel } from "../lib/models.js";
 import type { OrcaConfig, SprintStatus, Sprint, Phase, Shard } from "../lib/types.js";
 
 interface NewSprintProps {
@@ -21,12 +22,15 @@ interface NewSprintProps {
   onBack: () => void;
   onSprintCreated: (status: SprintStatus) => void;
   onProjectPathChange?: (newPath: string) => void;
+  startAtCreateProject?: boolean;
 }
 
 type Step =
+  | "check-project"      // Initial step: check for existing shards in current project
   | "select-project"
   | "create-project"
   | "prd-qa"
+  | "view-shards"        // New: view/edit shards with multi-select
   | "existing-shards"    // New: detected existing shards - resume or regenerate?
   | "sprint-type"        // New: choose initial/bug/feature/enhancement
   | "name"
@@ -76,8 +80,18 @@ export function NewSprint({
   onBack,
   onSprintCreated,
   onProjectPathChange,
+  startAtCreateProject,
 }: NewSprintProps) {
-  const [step, setStep] = useState<Step>("select-project");
+  // Determine initial step based on props
+  const getInitialStep = (): Step => {
+    if (startAtCreateProject) {
+      return "create-project";
+    }
+    // Default: skip project selection and check for existing shards
+    return "check-project";
+  };
+  
+  const [step, setStep] = useState<Step>(getInitialStep());
   const [sprintData, setSprintData] = useState<SprintData>({
     name: "",
     description: "",
@@ -1235,6 +1249,32 @@ ${shard.acceptanceCriteria.map((c) => `- [ ] ${c}`).join("\n")}
       : join(projectPath, "projects");
 
     switch (step) {
+      case "check-project":
+        // Automatically check for existing shards in the current project path
+        // This runs once on mount and transitions to the appropriate next step
+        (async () => {
+          setLoading(true);
+          setLoadingMessage("Checking project...");
+          
+          // Check for existing shards first
+          const existingShardsResult = await checkExistingShards(projectPath);
+          if (existingShardsResult) {
+            setExistingShards(existingShardsResult.shards);
+            setExistingSprintName(existingShardsResult.sprintName);
+            setLoading(false);
+            setStep("existing-shards");
+            return;
+          }
+          
+          // Check if project has PRD
+          const hasPrdResult = await hasPrd(projectPath);
+          setProjectHasPrd(hasPrdResult);
+          setLoading(false);
+          // Has PRD -> sprint type selection, no PRD -> PRD Q&A first
+          setStep(hasPrdResult ? "sprint-type" : "prd-qa");
+        })();
+        return null;
+        
       case "select-project":
         
         const projectMenuItems: MenuItem[] = [
@@ -1296,7 +1336,8 @@ ${shard.acceptanceCriteria.map((c) => `- [ ] ${c}`).join("\n")}
             if (existingShardsResult) {
               setExistingShards(existingShardsResult.shards);
               setExistingSprintName(existingShardsResult.sprintName);
-              setStep("existing-shards");
+              // Go directly to shards view with multi-select
+              setStep("view-shards");
               return;
             }
             // Check if project has PRD
@@ -1369,6 +1410,21 @@ ${shard.acceptanceCriteria.map((c) => `- [ ] ${c}`).join("\n")}
             hint: `Continue reviewing ${existingShards.length} shards from "${existingSprintName}"`,
           },
           {
+            label: "─── Edit Individual Shards ───",
+            value: "divider",
+            disabled: true,
+          },
+          ...existingShards.map((shard, i) => ({
+            label: `  ${shard.id}: ${shard.title.slice(0, 40)}${shard.title.length > 40 ? "..." : ""}`,
+            value: `edit:${i}`,
+            hint: shard.type,
+          })),
+          {
+            label: "───────────────────────",
+            value: "divider2",
+            disabled: true,
+          },
+          {
             label: "🔄 Regenerate Shards",
             value: "regenerate",
             hint: "Analyze PRD again and create new shards",
@@ -1390,20 +1446,23 @@ ${shard.acceptanceCriteria.map((c) => `- [ ] ${c}`).join("\n")}
             <Text color="yellow">
               Found {existingShards.length} shards in sprint "{existingSprintName}"
             </Text>
-            <Box marginTop={1} flexDirection="column" paddingLeft={1}>
-              {existingShards.slice(0, 5).map((shard, i) => (
-                <Text key={i} color="gray">• {shard.id}: {shard.title}</Text>
-              ))}
-              {existingShards.length > 5 && (
-                <Text color="gray" dimColor>...and {existingShards.length - 5} more</Text>
-              )}
-            </Box>
             <Box marginTop={1}>
               <Menu
                 items={existingShardMenuItems}
                 onSelect={async (value) => {
                   if (value === "back") {
                     setStep("select-project");
+                  } else if (value.startsWith("edit:")) {
+                    // Edit individual shard - go to review-shards with that shard selected
+                    const shardIndex = parseInt(value.replace("edit:", ""), 10);
+                    setSprintData((prev) => ({
+                      ...prev,
+                      name: existingSprintName,
+                      shardDrafts: existingShards,
+                    }));
+                    setCurrentShardIndex(shardIndex);
+                    setShardReviewMode("view");
+                    setStep("review-shards");
                   } else if (value === "resume") {
                     // Load existing shards into sprint data and go to review
                     setSprintData((prev) => ({
@@ -1449,20 +1508,16 @@ ${shard.acceptanceCriteria.map((c) => `- [ ] ${c}`).join("\n")}
       case "prd-qa":
         return (
           <PrdQA
-            projectName={newProjectName || selectedProjectPath.split("/").pop() || "Project"}
+            projectName={newProjectName || selectedProjectPath.split("/").pop() || "project"}
             projectPath={selectedProjectPath}
-            initialAnswers={prdAnswers || undefined}
             onComplete={async (answers) => {
-              setPrdAnswers(answers);
               setLoading(true);
-              setLoadingMessage("Saving PRD...");
-              
               try {
                 await updatePrdFromAnswers(selectedProjectPath, answers);
                 setProjectHasPrd(true);
                 setLoading(false);
-                // After PRD, go to sprint type selection
-                setStep("sprint-type");
+                setStep("analyze-patterns");
+                await runAnalyzePrd();
               } catch (err) {
                 setError(err instanceof Error ? err.message : "Failed to save PRD");
                 setLoading(false);
@@ -1471,6 +1526,22 @@ ${shard.acceptanceCriteria.map((c) => `- [ ] ${c}`).join("\n")}
             onCancel={() => setStep("select-project")}
           />
         );
+
+      case "view-shards":
+        // Load existing shards into sprint data and transition to review
+        if (existingShards.length > 0 && sprintData.shardDrafts.length === 0) {
+          setSprintData((prev) => ({
+            ...prev,
+            name: existingSprintName,
+            shardDrafts: existingShards,
+          }));
+          setCurrentShardIndex(0);
+          setStep("review-shards");
+          return null;
+        }
+        // If already loaded, just redirect
+        setStep("review-shards");
+        return null;
 
       case "sprint-type":
         const sprintTypeItems: MenuItem[] = [

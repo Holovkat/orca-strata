@@ -115,6 +115,7 @@ async function scanShards(
             type: parsed.metadata.type,
             dependencies: parsed.metadata.dependencies,
             creates: parsed.metadata.creates,
+            model: parsed.metadata.model,
           });
         }
       }
