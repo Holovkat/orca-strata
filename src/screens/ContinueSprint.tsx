@@ -319,6 +319,8 @@ function BuildPhase({
   appendDroidOutput,
   onStartChat,
 }: PhaseProps) {
+  const [runMode, setRunMode] = React.useState<"auto" | "interactive">("auto");
+  
   const graph = buildDependencyGraph(sprintStatus.sprint.shards);
   const completedIds = new Set(
     sprintStatus.sprint.shards.filter((s) => s.status === "Done" || s.status === "Ready for Review").map((s) => s.id)
@@ -329,6 +331,13 @@ function BuildPhase({
 
   const readyShards = getShardsReadyToRun(graph, completedIds, inProgressIds);
   const readyShardObjects = sprintStatus.sprint.shards.filter((s) => readyShards.includes(s.id));
+
+  // Handle Shift+Tab to toggle mode
+  useInput((input, key) => {
+    if (key.tab && key.shift) {
+      setRunMode(prev => prev === "auto" ? "interactive" : "auto");
+    }
+  });
 
   const startShard = async (shard: Shard) => {
     setLoading(true);
@@ -450,23 +459,16 @@ Begin implementation.`;
 
   const menuItems: MenuItem[] = [
     {
-      label: "Start All Ready Shards (Auto)",
+      label: `Start All Ready (${runMode === "auto" ? "Auto" : "Interactive"})`,
       value: "start-all",
       hint: `${readyShardObjects.length} shards ready`,
       disabled: readyShardObjects.length === 0,
     },
-    ...readyShardObjects.flatMap((shard) => [
-      {
-        label: `Auto: ${shard.title}`,
-        value: `start-${shard.id}`,
-        hint: `${shard.type} - headless`,
-      },
-      {
-        label: `Chat: ${shard.title}`,
-        value: `chat-${shard.id}`,
-        hint: `${shard.type} - interactive`,
-      },
-    ]),
+    ...readyShardObjects.map((shard) => ({
+      label: shard.title,
+      value: `run-${shard.id}`,
+      hint: `${shard.type}`,
+    })),
     {
       label: "View Active Droids",
       value: "view-droids",
@@ -482,17 +484,23 @@ Begin implementation.`;
     if (value === "back") {
       onBack();
     } else if (value === "start-all") {
-      // Start shards sequentially for now
-      for (const shard of readyShardObjects) {
-        await startShard(shard);
+      if (runMode === "auto") {
+        // Start shards sequentially in auto mode
+        for (const shard of readyShardObjects) {
+          await startShard(shard);
+        }
+      } else {
+        // Can't start all in interactive mode
+        setMessage({ type: "info", text: "Switch to Auto mode to start all shards" });
       }
-    } else if (value.startsWith("chat-")) {
-      const shardId = value.replace("chat-", "");
+    } else if (value.startsWith("run-")) {
+      const shardId = value.replace("run-", "");
       const shard = sprintStatus.sprint.shards.find((s) => s.id === shardId);
-      if (shard && onStartChat) {
-        // Generate initial prompt for the chat
-        const shardContent = await readShard(join(projectPath, shard.file));
-        const prompt = `I'm working on shard: ${shard.title}
+      if (shard) {
+        if (runMode === "interactive" && onStartChat) {
+          // Interactive mode - start chat
+          const shardContent = await readShard(join(projectPath, shard.file));
+          const prompt = `I'm working on shard: ${shard.title}
 
 Please read the shard file at ${shard.file} and help me implement it.
 
@@ -503,28 +511,33 @@ ${shardContent?.task || "See shard file for details."}
 ${shardContent?.acceptanceCriteria.map((c) => `- ${c}`).join("\n") || "See shard file"}
 
 Let's start by reviewing the requirements and then implementing step by step.`;
-        onStartChat(shard, prompt);
-      }
-    } else if (value.startsWith("start-")) {
-      const shardId = value.replace("start-", "");
-      const shard = sprintStatus.sprint.shards.find((s) => s.id === shardId);
-      if (shard) {
-        await startShard(shard);
+          onStartChat(shard, prompt);
+        } else {
+          // Auto mode - run headless
+          await startShard(shard);
+        }
       }
     }
   };
 
   return (
     <Box flexDirection="column">
-      <Text bold color="blue">
-        Build Phase
-      </Text>
-      <Box marginY={1}>
+      <Box marginBottom={1}>
+        <Text bold color="blue">Build Phase</Text>
+        <Text color="gray"> • Mode: </Text>
+        <Text color={runMode === "auto" ? "green" : "cyan"} bold>
+          {runMode === "auto" ? "Auto (headless)" : "Interactive (chat)"}
+        </Text>
+      </Box>
+      <Box marginBottom={1}>
         <Text>Ready: {readyShardObjects.length}</Text>
         <Text> | In Progress: {sprintStatus.counts.inProgress}</Text>
         <Text> | Complete: {sprintStatus.counts.readyForReview}</Text>
       </Box>
       <Menu items={menuItems} onSelect={handleSelect} />
+      <Box marginTop={1}>
+        <Text color="gray" dimColor>Shift+Tab: toggle Auto/Interactive mode</Text>
+      </Box>
     </Box>
   );
 }
