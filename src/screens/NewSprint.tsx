@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect } from "react";
-import { Box, Text, useInput } from "ink";
+import { Box, Text, useInput, useStdout } from "ink";
 import { join } from "path";
 import { mkdir, writeFile } from "fs/promises";
 import { QuestionPrompt } from "../components/QuestionPrompt.js";
@@ -1712,59 +1712,12 @@ ${shard.acceptanceCriteria.map((c) => `- [ ] ${c}`).join("\n")}
               )}
             </Box>
             
-            <Box flexDirection="column" marginBottom={1} paddingX={1} borderStyle="single" borderColor="gray">
-              <Text bold color="green">{currentShard.title}</Text>
-              <Text color="gray">ID: {currentShard.id} | Type: {currentShard.type}</Text>
-              
-              <Box marginTop={1} flexDirection="column">
-                <Text bold>Context:</Text>
-                <Text color="gray">{currentShard.context}</Text>
-              </Box>
-              
-              <Box marginTop={1} flexDirection="column">
-                <Text bold>Task:</Text>
-                <Text>{currentShard.task}</Text>
-              </Box>
-              
-              <Box marginTop={1} flexDirection="column">
-                <Text bold>Acceptance Criteria:</Text>
-                {currentShard.acceptanceCriteria.map((c, i) => (
-                  <Text key={i} color="gray">• {c}</Text>
-                ))}
-              </Box>
-              
-              {currentShard.creates.length > 0 && (
-                <Box marginTop={1} flexDirection="column">
-                  <Text bold>Creates:</Text>
-                  <Text color="blue">{currentShard.creates.join(", ")}</Text>
-                </Box>
-              )}
-              
-              {currentShard.dependsOn.length > 0 && (
-                <Box marginTop={1}>
-                  <Text color="yellow">Depends on: {currentShard.dependsOn.join(", ")}</Text>
-                </Box>
-              )}
-              
-              {needsUi && (
-                <Box marginTop={1}>
-                  <Text color="magenta">
-                    🎨 UI/UX: {
-                      isAligned ? "✓ Aligned" : 
-                      hasDesignSpec ? "Has design spec (not aligned)" : 
-                      "Needs design"
-                    }
-                  </Text>
-                </Box>
-              )}
-              
-              {hasDesignSpec && (
-                <Box marginTop={1} flexDirection="column">
-                  <Text bold color="magenta">UI Design Spec (preview):</Text>
-                  <Text color="gray" dimColor>{currentShard.uiDesignSpec?.slice(0, 200)}...</Text>
-                </Box>
-              )}
-            </Box>
+            <ShardReviewCard 
+              shard={currentShard} 
+              needsUi={needsUi} 
+              hasDesignSpec={hasDesignSpec} 
+              isAligned={isAligned} 
+            />
             
             {shardReviewMode === "view" && !editingShardField && (
               <Menu 
@@ -1888,4 +1841,91 @@ function PressEnter({ onPress }: { onPress: () => void }) {
     }
   });
   return null;
+}
+
+// Compact shard review card that fits in terminal viewport
+function ShardReviewCard({ 
+  shard, 
+  needsUi, 
+  hasDesignSpec, 
+  isAligned 
+}: { 
+  shard: ShardDraft; 
+  needsUi: boolean; 
+  hasDesignSpec: boolean; 
+  isAligned: boolean;
+}) {
+  const { stdout } = useStdout();
+  const terminalWidth = stdout?.columns || 80;
+  const terminalHeight = stdout?.rows || 24;
+  
+  // Calculate available height for content (leave room for header, menu, footer)
+  // Header ~3 lines, Menu ~12 lines, Footer ~2 lines = ~17 reserved
+  const maxContentHeight = Math.max(8, terminalHeight - 17);
+  const maxChars = (terminalWidth - 6) * 2; // ~2 lines per section
+  
+  const truncate = (text: string, max: number) => 
+    text.length <= max ? text : text.slice(0, max - 3) + "...";
+
+  return (
+    <Box 
+      flexDirection="column" 
+      paddingX={1} 
+      borderStyle="single" 
+      borderColor="gray"
+      height={maxContentHeight}
+      overflow="hidden"
+    >
+      {/* Title row */}
+      <Box>
+        <Text bold color="green">{truncate(shard.title, terminalWidth - 10)}</Text>
+      </Box>
+      <Box>
+        <Text color="gray">ID: {shard.id} | Type: {shard.type}</Text>
+        {shard.dependsOn.length > 0 && (
+          <Text color="yellow"> | Deps: {shard.dependsOn.join(", ")}</Text>
+        )}
+      </Box>
+      
+      {/* Context - compact */}
+      <Box marginTop={1} flexDirection="column">
+        <Text bold dimColor>Context:</Text>
+        <Text color="gray" wrap="truncate-end">{truncate(shard.context, maxChars)}</Text>
+      </Box>
+      
+      {/* Task - compact */}
+      <Box marginTop={1} flexDirection="column">
+        <Text bold dimColor>Task:</Text>
+        <Text wrap="truncate-end">{truncate(shard.task, maxChars)}</Text>
+      </Box>
+      
+      {/* Acceptance Criteria - show just count and first 2 */}
+      <Box marginTop={1} flexDirection="column">
+        <Text bold dimColor>Criteria ({shard.acceptanceCriteria.length}):</Text>
+        {shard.acceptanceCriteria.slice(0, 2).map((c, i) => (
+          <Text key={i} color="gray" wrap="truncate-end">• {truncate(c, terminalWidth - 10)}</Text>
+        ))}
+        {shard.acceptanceCriteria.length > 2 && (
+          <Text color="gray" dimColor>  +{shard.acceptanceCriteria.length - 2} more</Text>
+        )}
+      </Box>
+      
+      {/* Creates - single line */}
+      {shard.creates.length > 0 && (
+        <Box marginTop={1}>
+          <Text dimColor>Creates: </Text>
+          <Text color="blue" wrap="truncate-end">{truncate(shard.creates.join(", "), terminalWidth - 15)}</Text>
+        </Box>
+      )}
+      
+      {/* UI status badge */}
+      {needsUi && (
+        <Box marginTop={1}>
+          <Text color="magenta">
+            🎨 {isAligned ? "✓ Aligned" : hasDesignSpec ? "Spec ready" : "Needs design"}
+          </Text>
+        </Box>
+      )}
+    </Box>
+  );
 }
