@@ -482,3 +482,23 @@ export async function getCommitsBetween(
   
   return result.stdout.trim().split("\n");
 }
+
+export async function hasShardWork(
+  shardBranch: string,
+  sprintBranch: string,
+  cwd?: string
+): Promise<{ exists: boolean; hasCommits: boolean; commitCount: number }> {
+  // Check if branch exists
+  const exists = await branchExists(shardBranch, cwd);
+  if (!exists) {
+    return { exists: false, hasCommits: false, commitCount: 0 };
+  }
+  
+  // Check for commits ahead of sprint branch
+  const commits = await getCommitsBetween(sprintBranch, shardBranch, cwd);
+  return {
+    exists: true,
+    hasCommits: commits.length > 0,
+    commitCount: commits.length,
+  };
+}

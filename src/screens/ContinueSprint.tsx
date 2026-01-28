@@ -12,6 +12,7 @@ import {
   rebaseStack,
   getCurrentBranch,
   setGitDebugCallback,
+  hasShardWork,
 } from "../lib/git.js";
 import { closeIssue, updateIssueBody, addIssueLabel, removeIssueLabel } from "../lib/github.js";
 import { buildDependencyGraph, getShardsReadyToRun } from "../lib/dependencies.js";
@@ -363,6 +364,7 @@ function BuildPhase({
   setViewingShardId,
 }: BuildPhaseProps) {
   const [runMode, setRunMode] = React.useState<"auto" | "interactive">("auto");
+  const [workMode, setWorkMode] = React.useState<"skip" | "rebuild">("skip");
   
   const graph = buildDependencyGraph(sprintStatus.sprint.shards);
   const completedIds = new Set(
@@ -375,21 +377,44 @@ function BuildPhase({
   const readyShards = getShardsReadyToRun(graph, completedIds, inProgressIds);
   const readyShardObjects = sprintStatus.sprint.shards.filter((s) => readyShards.includes(s.id));
 
-  // Handle Shift+Tab to toggle mode
+  // Handle Shift+Tab to toggle modes
   useInput((input, key) => {
     if (key.tab && key.shift) {
       setRunMode(prev => prev === "auto" ? "interactive" : "auto");
     }
+    // Alt+S to toggle skip/rebuild mode
+    if (input === "s" && key.meta) {
+      setWorkMode(prev => prev === "skip" ? "rebuild" : "skip");
+    }
   });
 
-  const startShard = async (shard: Shard) => {
+  const startShard = async (shard: Shard, forceRebuild = false) => {
     setLoading(true);
-    setLoadingMessage(`Starting ${shard.title}...`);
+    setLoadingMessage(`Checking ${shard.title}...`);
 
     try {
-      // Create worktree for isolation
       const worktreePath = join(projectPath, config.paths.worktrees, shard.id);
       const branchName = `${sprintStatus.sprint.branch}-${shard.id}`;
+
+      // Check for existing work on this shard branch
+      const existingWork = await hasShardWork(branchName, sprintStatus.sprint.branch, projectPath);
+      
+      if (existingWork.hasCommits && !forceRebuild && workMode === "skip") {
+        // Skip this shard - it has existing work
+        appendDroidOutput?.(`[Skipping ${shard.id}: has ${existingWork.commitCount} commit(s) on branch ${branchName}]\n`);
+        setMessage({ 
+          type: "info", 
+          text: `Skipped ${shard.title} - has ${existingWork.commitCount} existing commit(s). Use Rebuild mode to redo.` 
+        });
+        setLoading(false);
+        return;
+      }
+
+      if (existingWork.hasCommits && (forceRebuild || workMode === "rebuild")) {
+        appendDroidOutput?.(`[Rebuilding ${shard.id}: overwriting ${existingWork.commitCount} existing commit(s)]\n`);
+      }
+
+      setLoadingMessage(`Starting ${shard.title}...`);
 
       // Determine base branch for stacking: if shard has dependencies, 
       // branch from the last completed dependency (Graphite-style stacking)
@@ -566,13 +591,28 @@ Begin implementation.`;
       const shard = sprintStatus.sprint.shards.find((s) => s.id === shardId);
       if (shard) {
         if (runMode === "interactive" && onStartChat) {
-          // Interactive mode - create worktree first, then start chat
+          // Interactive mode - check for existing work, then create worktree and start chat
           setLoading(true);
-          setLoadingMessage(`Creating worktree for ${shard.title}...`);
+          setLoadingMessage(`Checking ${shard.title}...`);
           
           try {
             const worktreePath = join(projectPath, config.paths.worktrees, shard.id);
             const branchName = `${sprintStatus.sprint.branch}-${shard.id}`;
+            
+            // Check for existing work on this shard branch
+            const existingWork = await hasShardWork(branchName, sprintStatus.sprint.branch, projectPath);
+            
+            if (existingWork.hasCommits && workMode === "skip") {
+              // Skip this shard - it has existing work
+              setMessage({ 
+                type: "info", 
+                text: `Skipped ${shard.title} - has ${existingWork.commitCount} existing commit(s). Use Rebuild mode to redo.` 
+              });
+              setLoading(false);
+              return;
+            }
+            
+            setLoadingMessage(`Creating worktree for ${shard.title}...`);
             
             // Determine base branch for stacking (same as auto mode)
             let baseBranch: string | undefined;
@@ -651,6 +691,10 @@ Let's start by reviewing the requirements and then implementing step by step.`;
         <Text color={runMode === "auto" ? "green" : "cyan"} bold>
           {runMode === "auto" ? "Auto (headless)" : "Interactive (chat)"}
         </Text>
+        <Text color="gray"> • Work: </Text>
+        <Text color={workMode === "skip" ? "yellow" : "red"} bold>
+          {workMode === "skip" ? "Skip Completed" : "Rebuild All"}
+        </Text>
       </Box>
       <Box marginBottom={1}>
         <Text>Ready: {readyShardObjects.length}</Text>
@@ -658,8 +702,8 @@ Let's start by reviewing the requirements and then implementing step by step.`;
         <Text> | Complete: {sprintStatus.counts.readyForReview}</Text>
       </Box>
       <Menu items={menuItems} onSelect={handleSelect} />
-      <Box marginTop={1}>
-        <Text color="gray" dimColor>Shift+Tab: toggle Auto/Interactive mode</Text>
+      <Box marginTop={1} flexDirection="column">
+        <Text color="gray" dimColor>Shift+Tab: toggle Auto/Interactive • Alt+S: toggle Skip/Rebuild</Text>
       </Box>
     </Box>
   );
