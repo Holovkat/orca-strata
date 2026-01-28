@@ -9,6 +9,10 @@ export function setGitDebugCallback(cb: ((msg: string) => void) | null) {
   debugCallback = cb;
 }
 
+function debugLog(msg: string) {
+  debugCallback?.(msg + "\n");
+}
+
 async function runGit(
   args: string[],
   cwd?: string
@@ -501,4 +505,90 @@ export async function hasShardWork(
     hasCommits: commits.length > 0,
     commitCount: commits.length,
   };
+}
+
+/**
+ * Finalize review by merging the review branch into the sprint branch.
+ * This should be called after all shards pass build verification.
+ * 
+ * Steps:
+ * 1. Push the review branch to remote
+ * 2. Fast-forward the sprint branch to the review branch
+ * 3. Push the sprint branch to remote
+ * 4. Clean up the review worktree
+ */
+export async function finalizeReview(
+  sprintBranch: string,
+  reviewPath: string,
+  cwd?: string
+): Promise<{ success: boolean; error?: string }> {
+  const reviewBranch = `${sprintBranch}-review`;
+  
+  debugLog(`[finalizeReview] Starting finalization of ${reviewBranch} into ${sprintBranch}`);
+  
+  // First, push the review branch to remote (for backup/PR purposes)
+  debugLog(`[finalizeReview] Pushing review branch to remote...`);
+  const pushReview = await runGit(["push", "-u", "origin", reviewBranch, "--force-with-lease"], reviewPath);
+  if (pushReview.code !== 0) {
+    debugLog(`[finalizeReview] Warning: Failed to push review branch: ${pushReview.stderr}`);
+    // Continue anyway - the local merge is what matters
+  }
+  
+  // Update sprint branch to point to the review branch's HEAD
+  // We do this in the main repo, not the worktree
+  debugLog(`[finalizeReview] Updating sprint branch ${sprintBranch} to review HEAD...`);
+  
+  // Get the commit SHA of review branch
+  const getHead = await runGit(["rev-parse", "HEAD"], reviewPath);
+  if (getHead.code !== 0) {
+    return { success: false, error: "Failed to get review branch HEAD" };
+  }
+  const reviewHead = getHead.stdout.trim();
+  debugLog(`[finalizeReview] Review HEAD: ${reviewHead}`);
+  
+  // Update the sprint branch ref to point to review HEAD
+  const updateRef = await runGit(
+    ["update-ref", `refs/heads/${sprintBranch}`, reviewHead],
+    cwd
+  );
+  if (updateRef.code !== 0) {
+    return { success: false, error: `Failed to update sprint branch: ${updateRef.stderr}` };
+  }
+  
+  // Push the updated sprint branch
+  debugLog(`[finalizeReview] Pushing updated sprint branch to remote...`);
+  const pushSprint = await runGit(["push", "origin", sprintBranch, "--force-with-lease"], cwd);
+  if (pushSprint.code !== 0) {
+    return { success: false, error: `Failed to push sprint branch: ${pushSprint.stderr}` };
+  }
+  
+  // Clean up: remove review worktree and branch
+  debugLog(`[finalizeReview] Cleaning up review worktree...`);
+  await runGit(["worktree", "remove", "--force", reviewPath], cwd);
+  await rm(reviewPath, { recursive: true, force: true }).catch(() => {});
+  await runGit(["worktree", "prune"], cwd);
+  
+  // Delete local review branch
+  await runGit(["branch", "-D", reviewBranch], cwd);
+  
+  debugLog(`[finalizeReview] Review finalized successfully`);
+  return { success: true };
+}
+
+/**
+ * Clean up shard worktrees after review is finalized.
+ * Call this after finalizeReview to remove individual shard worktrees.
+ */
+export async function cleanupShardWorktrees(
+  shardIds: string[],
+  worktreesPath: string,
+  cwd?: string
+): Promise<void> {
+  for (const shardId of shardIds) {
+    const worktreePath = join(worktreesPath, shardId);
+    debugLog(`[cleanupShardWorktrees] Removing worktree: ${worktreePath}`);
+    await runGit(["worktree", "remove", "--force", worktreePath], cwd);
+    await rm(worktreePath, { recursive: true, force: true }).catch(() => {});
+  }
+  await runGit(["worktree", "prune"], cwd);
 }
