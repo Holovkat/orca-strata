@@ -12,6 +12,7 @@ interface ViewStatusProps {
   sprintStatus: SprintStatus | null;
   onBack: () => void;
   onEditShard?: (shard: Shard) => void;
+  onProjectPathChange?: (newPath: string) => void;
 }
 
 type SubScreen = "select-project" | "menu" | "board" | "issues" | "droids" | "shards";
@@ -22,6 +23,7 @@ export function ViewStatus({
   sprintStatus: initialSprintStatus,
   onBack,
   onEditShard,
+  onProjectPathChange,
 }: ViewStatusProps) {
   const [subScreen, setSubScreen] = useState<SubScreen>(initialSprintStatus ? "menu" : "select-project");
   const [sprintStatus, setSprintStatus] = useState<SprintStatus | null>(initialSprintStatus);
@@ -71,6 +73,7 @@ export function ViewStatus({
   const loadProjectStatus = async (path: string) => {
     setLoading(true);
     setSelectedProjectPath(path);
+    onProjectPathChange?.(path); // Update App's project path
     const status = await deriveSprintStatus(path, config);
     setSprintStatus(status);
     setLoading(false);
