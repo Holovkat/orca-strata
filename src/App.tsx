@@ -12,7 +12,22 @@ import { Header } from "./components/Header.js";
 import { Spinner } from "./components/Spinner.js";
 import { deriveSprintStatus, refreshStatus } from "./lib/state.js";
 import { saveConfig } from "./lib/config.js";
-import type { OrcaConfig, Screen, SprintStatus, Shard } from "./lib/types.js";
+import type { OrcaConfig, Screen, SprintStatus, Shard, SprintStatusCounts } from "./lib/types.js";
+
+// Calculate counts from shards list
+function calculateCounts(shards: Shard[]): SprintStatusCounts {
+  return {
+    total: shards.length,
+    readyToBuild: shards.filter(s => s.status === "Ready to Build").length,
+    inProgress: shards.filter(s => s.status === "In Progress").length,
+    readyForReview: shards.filter(s => s.status === "Ready for Review").length,
+    inReview: shards.filter(s => s.status === "In Review").length,
+    readyForUat: shards.filter(s => s.status === "Ready for UAT").length,
+    uatInProgress: shards.filter(s => s.status === "UAT in Progress").length,
+    userAcceptance: shards.filter(s => s.status === "User Acceptance").length,
+    done: shards.filter(s => s.status === "Done").length,
+  };
+}
 
 interface AppProps {
   config: OrcaConfig;
@@ -93,13 +108,34 @@ export function App({ config, projectPath, configFile }: AppProps) {
       const updatedShards = sprintStatus.sprint.shards.map(s =>
         s.id === updatedShard.id ? updatedShard : s
       );
+      // Recalculate counts
+      const counts = calculateCounts(updatedShards);
       setSprintStatus({
         ...sprintStatus,
         sprint: {
           ...sprintStatus.sprint,
           shards: updatedShards,
         },
+        counts,
       });
+    }
+  }, [sprintStatus]);
+
+  // Handle shard deprecation - remove from sprint
+  const handleShardDeprecated = useCallback((shardId: string) => {
+    if (sprintStatus) {
+      const updatedShards = sprintStatus.sprint.shards.filter(s => s.id !== shardId);
+      // Recalculate counts
+      const counts = calculateCounts(updatedShards);
+      setSprintStatus({
+        ...sprintStatus,
+        sprint: {
+          ...sprintStatus.sprint,
+          shards: updatedShards,
+        },
+        counts,
+      });
+      setSelectedShard(null);
     }
   }, [sprintStatus]);
 
@@ -171,6 +207,7 @@ export function App({ config, projectPath, configFile }: AppProps) {
               shard={selectedShard}
               onBack={() => setScreen("view-status")}
               onShardUpdated={handleShardUpdated}
+              onShardDeprecated={handleShardDeprecated}
             />
           );
         }
