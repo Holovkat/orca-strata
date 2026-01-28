@@ -1416,6 +1416,7 @@ ${shard.acceptanceCriteria.map((c) => `- [ ] ${c}`).join("\n")}
                       setEditingShardField(value);
                     }
                   }}
+                  onCancel={() => setShardReviewMode("view")}
                 />
               </Box>
             )}
