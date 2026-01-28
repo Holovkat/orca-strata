@@ -1,4 +1,5 @@
 export type Screen =
+  | "select-project"
   | "main"
   | "new-sprint"
   | "continue-sprint"
