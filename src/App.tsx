@@ -10,6 +10,7 @@ import { ShardEditor } from "./screens/ShardEditor.js";
 import { DroidChat } from "./screens/DroidChat.js";
 import { Header } from "./components/Header.js";
 import { Spinner } from "./components/Spinner.js";
+import { ProjectSelector } from "./components/ProjectSelector.js";
 import { deriveSprintStatus, refreshStatus } from "./lib/state.js";
 import { saveConfig } from "./lib/config.js";
 import type { OrcaConfig, Screen, SprintStatus, Shard, SprintStatusCounts } from "./lib/types.js";
@@ -36,24 +37,36 @@ interface AppProps {
 }
 
 export function App({ config, projectPath, configFile }: AppProps) {
-  const [screen, setScreen] = useState<Screen>("main");
+  const [screen, setScreen] = useState<Screen>("select-project");
   const [sprintStatus, setSprintStatus] = useState<SprintStatus | null>(null);
   const [currentConfig, setCurrentConfig] = useState(config);
   const [currentProjectPath, setCurrentProjectPath] = useState(projectPath);
-  const [loading, setLoading] = useState(true);
+  const [currentProjectName, setCurrentProjectName] = useState<string>("");
+  const [loading, setLoading] = useState(false);
   const [selectedShard, setSelectedShard] = useState<Shard | null>(null);
   const [chatPrompt, setChatPrompt] = useState<string | undefined>(undefined);
 
-  // Derive state from sources of truth on startup
-  useEffect(() => {
-    async function init() {
-      const status = await deriveSprintStatus(currentProjectPath, currentConfig);
-      setSprintStatus(status);
-      setLoading(false);
-    }
+  // Load project state when project is selected
+  const loadProjectState = useCallback(async (path: string) => {
+    setLoading(true);
+    const status = await deriveSprintStatus(path, currentConfig);
+    setSprintStatus(status);
+    setLoading(false);
+  }, [currentConfig]);
 
-    init();
-  }, [currentProjectPath, currentConfig]);
+  // Handle project selection
+  const handleProjectSelected = useCallback(async (path: string, name: string) => {
+    if (path === "__new__") {
+      // Go to new sprint to create a new project
+      setScreen("new-sprint");
+      return;
+    }
+    
+    setCurrentProjectPath(path);
+    setCurrentProjectName(name);
+    await loadProjectState(path);
+    setScreen("main");
+  }, [loadProjectState]);
 
   // Handle config changes - save to file
   const handleConfigChange = useCallback(async (newConfig: OrcaConfig) => {
@@ -67,9 +80,11 @@ export function App({ config, projectPath, configFile }: AppProps) {
   }, [currentProjectPath, configFile]);
 
   // Handle project path change (when creating new project in NewSprint)
-  const handleProjectPathChange = useCallback((newPath: string) => {
+  const handleProjectPathChange = useCallback(async (newPath: string) => {
     setCurrentProjectPath(newPath);
-  }, []);
+    setCurrentProjectName(newPath.split("/").pop() || "project");
+    await loadProjectState(newPath);
+  }, [loadProjectState]);
 
   // Handle sprint status changes (runtime only - active droids, etc.)
   const handleSprintStatusChange = useCallback((status: SprintStatus | null) => {
@@ -79,8 +94,12 @@ export function App({ config, projectPath, configFile }: AppProps) {
   // Handle new sprint creation
   const handleSprintCreated = useCallback((status: SprintStatus) => {
     setSprintStatus(status);
+    // Update project name from path if not set
+    if (!currentProjectName) {
+      setCurrentProjectName(currentProjectPath.split("/").pop() || "project");
+    }
     setScreen("continue-sprint");
-  }, []);
+  }, [currentProjectName, currentProjectPath]);
 
   // Handle shard selection for editing
   const handleEditShard = useCallback((shard: Shard) => {
@@ -159,6 +178,14 @@ export function App({ config, projectPath, configFile }: AppProps) {
 
   const renderScreen = () => {
     switch (screen) {
+      case "select-project":
+        return (
+          <ProjectSelector
+            config={currentConfig}
+            initialProjectPath={currentProjectPath}
+            onProjectSelected={handleProjectSelected}
+          />
+        );
       case "main":
         return (
           <MainMenu
@@ -250,10 +277,15 @@ export function App({ config, projectPath, configFile }: AppProps) {
     }
   };
 
+  // Project selector has its own header, so skip the main header
+  if (screen === "select-project") {
+    return renderScreen();
+  }
+
   return (
     <Box flexDirection="column" padding={1}>
       <Header
-        projectName={currentConfig.project_name || currentProjectPath.split("/").pop() || "Unnamed Project"}
+        projectName={currentProjectName || currentConfig.project_name || currentProjectPath.split("/").pop() || "Unnamed Project"}
         sprintStatus={sprintStatus}
       />
       {renderScreen()}
