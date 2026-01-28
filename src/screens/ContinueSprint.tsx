@@ -43,24 +43,40 @@ export function ContinueSprint({
   onBack,
   onStatusChange,
   onStartChat,
+  runningDroids,
+  onAddRunningDroid,
+  onAppendDroidOutput,
+  onUpdateDroidStatus,
+  onViewDroid,
 }: ContinueSprintProps) {
   const [subScreen, setSubScreen] = useState<SubScreen>("menu");
   const [loading, setLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState("");
   const [message, setMessage] = useState<{ type: "success" | "error" | "info"; text: string } | null>(null);
   const [droidOutput, setDroidOutput] = useState("");
+  // Track which droid we're currently viewing output for (when not minimized)
+  const [viewingShardId, setViewingShardId] = useState<string | null>(null);
 
   const appendDroidOutput = useCallback((chunk: string) => {
     setDroidOutput((prev) => prev + chunk);
   }, []);
 
+  // Allow Esc to minimize when viewing droid output
   useInput((input, key) => {
-    if (key.escape && !loading) {
-      if (subScreen === "menu") {
-        onBack();
-      } else {
-        setSubScreen("menu");
-        setMessage(null);
+    if (key.escape) {
+      if (viewingShardId) {
+        // Minimize - go back to menu while droid runs in background
+        setViewingShardId(null);
+        setLoading(false);
+        setDroidOutput("");
+        setMessage({ type: "info", text: "Droid running in background. View in 'View Active Droids'" });
+      } else if (!loading) {
+        if (subScreen === "menu") {
+          onBack();
+        } else {
+          setSubScreen("menu");
+          setMessage(null);
+        }
       }
     }
   });
@@ -189,6 +205,12 @@ export function ContinueSprint({
             setMessage={setMessage}
             appendDroidOutput={appendDroidOutput}
             onStartChat={onStartChat}
+            runningDroids={runningDroids}
+            onAddRunningDroid={onAddRunningDroid}
+            onAppendDroidOutput={onAppendDroidOutput}
+            onUpdateDroidStatus={onUpdateDroidStatus}
+            onViewDroid={onViewDroid}
+            setViewingShardId={setViewingShardId}
           />
         );
       case "review":
@@ -313,6 +335,15 @@ interface PhaseProps {
   onStartChat?: (shard: Shard, prompt?: string) => void;
 }
 
+interface BuildPhaseProps extends PhaseProps {
+  runningDroids?: RunningDroid[];
+  onAddRunningDroid?: (droid: RunningDroid) => void;
+  onAppendDroidOutput?: (shardId: string, chunk: string) => void;
+  onUpdateDroidStatus?: (shardId: string, status: "running" | "complete" | "failed", exitCode?: number) => void;
+  onViewDroid?: (shardId: string) => void;
+  setViewingShardId: (shardId: string | null) => void;
+}
+
 function BuildPhase({
   config,
   projectPath,
@@ -324,7 +355,13 @@ function BuildPhase({
   setMessage,
   appendDroidOutput,
   onStartChat,
-}: PhaseProps) {
+  runningDroids,
+  onAddRunningDroid,
+  onAppendDroidOutput,
+  onUpdateDroidStatus,
+  onViewDroid,
+  setViewingShardId,
+}: BuildPhaseProps) {
   const [runMode, setRunMode] = React.useState<"auto" | "interactive">("auto");
   
   const graph = buildDependencyGraph(sprintStatus.sprint.shards);
@@ -489,6 +526,14 @@ Begin implementation.`;
   const handleSelect = async (value: string) => {
     if (value === "back") {
       onBack();
+    } else if (value === "view-droids") {
+      // Navigate to droid viewer (if there are running droids)
+      const firstDroid = runningDroids?.[0];
+      if (firstDroid && onViewDroid) {
+        onViewDroid(firstDroid.shardId);
+      } else {
+        setMessage({ type: "info", text: "No droids are currently running" });
+      }
     } else if (value === "start-all") {
       if (runMode === "auto") {
         // Start shards sequentially in auto mode
