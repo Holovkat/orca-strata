@@ -87,19 +87,21 @@ export interface Sprint {
   sprintIssue?: number;
 }
 
+export interface SprintStatusCounts {
+  total: number;
+  readyToBuild: number;
+  inProgress: number;
+  readyForReview: number;
+  inReview: number;
+  readyForUat: number;
+  uatInProgress: number;
+  userAcceptance: number;
+  done: number;
+}
+
 export interface SprintStatus {
   sprint: Sprint;
-  counts: {
-    total: number;
-    readyToBuild: number;
-    inProgress: number;
-    readyForReview: number;
-    inReview: number;
-    readyForUat: number;
-    uatInProgress: number;
-    userAcceptance: number;
-    done: number;
-  };
+  counts: SprintStatusCounts;
   activeDroids: ActiveDroid[];
 }
 
