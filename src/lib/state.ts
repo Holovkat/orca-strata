@@ -46,6 +46,7 @@ export async function deriveSprintStatus(
 
 /**
  * Scan features folder for sprint directories containing shards
+ * Also checks features/sprints/ for backward compatibility
  */
 export async function scanForSprints(
   projectPath: string,
@@ -59,6 +60,9 @@ export async function scanForSprints(
 
     for (const entry of entries) {
       if (entry.isDirectory() && !entry.name.startsWith(".")) {
+        // Skip the 'sprints' folder itself, we'll scan it separately
+        if (entry.name === "sprints") continue;
+        
         const sprintPath = join(fullPath, entry.name);
         const shards = await scanShards(sprintPath, featuresPath, entry.name);
 
@@ -78,6 +82,40 @@ export async function scanForSprints(
           });
         }
       }
+    }
+    
+    // Also check features/sprints/ for backward compatibility
+    const sprintsPath = join(fullPath, "sprints");
+    try {
+      const sprintEntries = await readdir(sprintsPath, { withFileTypes: true });
+      
+      for (const entry of sprintEntries) {
+        if (entry.isDirectory() && !entry.name.startsWith(".")) {
+          const sprintPath = join(sprintsPath, entry.name);
+          const shards = await scanShards(sprintPath, `${featuresPath}/sprints`, entry.name);
+
+          if (shards.length > 0) {
+            // Check if we already have this sprint from the main scan
+            const existingIndex = sprints.findIndex(s => s.id === `sprint-${entry.name}`);
+            if (existingIndex === -1) {
+              const checklist = await readChecklist(sprintPath);
+              
+              sprints.push({
+                id: `sprint-${entry.name}`,
+                name: checklist?.name || formatSprintName(entry.name),
+                branch: checklist?.branch || `feature/${entry.name}-base`,
+                phase: checklist?.phase || "build",
+                shards,
+                board: checklist?.board,
+                epicIssue: checklist?.epicIssue,
+                sprintIssue: checklist?.sprintIssue,
+              });
+            }
+          }
+        }
+      }
+    } catch {
+      // No sprints subfolder
     }
   } catch {
     // Features folder doesn't exist
