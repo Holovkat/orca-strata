@@ -26,6 +26,7 @@ type Step =
   | "select-project"
   | "create-project"
   | "prd-qa"
+  | "existing-shards"    // New: detected existing shards - resume or regenerate?
   | "sprint-type"        // New: choose initial/bug/feature/enhancement
   | "name"
   | "description"
@@ -103,6 +104,10 @@ export function NewSprint({
   const [editingShardField, setEditingShardField] = useState<string>("");
   const [rescopePrompt, setRescopePrompt] = useState<string>("");
   const [designTemplates, setDesignTemplates] = useState<string>("");
+  
+  // Existing shards detection
+  const [existingShards, setExistingShards] = useState<ShardDraft[]>([]);
+  const [existingSprintName, setExistingSprintName] = useState<string>("");
 
   // Load existing projects from workspace
   useEffect(() => {
@@ -381,6 +386,137 @@ Return ONLY the JSON object, no other text.`;
         i === shardIndex ? { ...s, [field]: value } : s
       ),
     }));
+  };
+
+  // Check for existing shards in a project's features/sprints folder
+  const checkExistingShards = async (projectDir: string): Promise<{ sprintName: string; shards: ShardDraft[] } | null> => {
+    try {
+      const { readdir, readFile, stat } = await import("fs/promises");
+      const sprintsDir = join(projectDir, "features", "sprints");
+      
+      // Check if sprints directory exists
+      try {
+        await stat(sprintsDir);
+      } catch {
+        return null;
+      }
+      
+      // Find sprint folders
+      const entries = await readdir(sprintsDir);
+      const sprintFolders: string[] = [];
+      
+      for (const entry of entries) {
+        const entryPath = join(sprintsDir, entry);
+        const entryStat = await stat(entryPath);
+        if (entryStat.isDirectory() && !entry.startsWith(".")) {
+          sprintFolders.push(entry);
+        }
+      }
+      
+      if (sprintFolders.length === 0) return null;
+      
+      // Get the most recent sprint folder (alphabetically last, assuming naming convention)
+      const latestSprint = sprintFolders.sort().pop()!;
+      const sprintPath = join(sprintsDir, latestSprint);
+      
+      // Read shard files
+      const shardFiles = await readdir(sprintPath);
+      const shards: ShardDraft[] = [];
+      
+      for (const file of shardFiles) {
+        if (!file.endsWith(".md") || file.startsWith(".")) continue;
+        
+        const content = await readFile(join(sprintPath, file), "utf-8");
+        const shard = parseShardContent(content, file.replace(".md", ""));
+        if (shard) {
+          shards.push(shard);
+        }
+      }
+      
+      if (shards.length === 0) return null;
+      
+      // Sort shards by ID
+      shards.sort((a, b) => a.id.localeCompare(b.id));
+      
+      return { sprintName: latestSprint, shards };
+    } catch {
+      return null;
+    }
+  };
+
+  // Parse a shard markdown file into a ShardDraft
+  const parseShardContent = (content: string, defaultId: string): ShardDraft | null => {
+    try {
+      const lines = content.split("\n");
+      
+      let title = defaultId;
+      let context = "";
+      let task = "";
+      const acceptanceCriteria: string[] = [];
+      const creates: string[] = [];
+      const dependsOn: string[] = [];
+      const modifies: string[] = [];
+      const requiredReading: Array<{ label: string; path: string }> = [];
+      
+      let currentSection = "";
+      
+      for (const line of lines) {
+        if (line.startsWith("# ")) {
+          title = line.slice(2).trim();
+        } else if (line.startsWith("## ")) {
+          currentSection = line.slice(3).trim().toLowerCase();
+        } else if (currentSection === "context" && line.trim()) {
+          context += (context ? "\n" : "") + line;
+        } else if (currentSection === "task" && line.trim()) {
+          task += (task ? "\n" : "") + line;
+        } else if (currentSection === "acceptance criteria" && line.startsWith("- ")) {
+          acceptanceCriteria.push(line.slice(2).replace(/^\[[ x]\]\s*/, "").trim());
+        } else if (currentSection === "required reading" && line.startsWith("- ")) {
+          const linkMatch = line.match(/\[([^\]]+)\]\(([^)]+)\)/);
+          if (linkMatch && linkMatch[1] && linkMatch[2]) {
+            requiredReading.push({ label: linkMatch[1], path: linkMatch[2] });
+          }
+        } else if (currentSection === "dependencies") {
+          if (line.includes("Creates:")) {
+            const items = line.split("Creates:")[1]?.split(",").map(s => s.trim()).filter(Boolean) || [];
+            creates.push(...items);
+          } else if (line.includes("Depends on:")) {
+            const items = line.split("Depends on:")[1]?.split(",").map(s => s.trim()).filter(Boolean) || [];
+            dependsOn.push(...items);
+          } else if (line.includes("Modifies:")) {
+            const items = line.split("Modifies:")[1]?.split(",").map(s => s.trim()).filter(Boolean) || [];
+            modifies.push(...items);
+          }
+        }
+      }
+      
+      // Determine type from content
+      const allContent = `${title} ${task} ${creates.join(" ")}`.toLowerCase();
+      let type: ShardDraft["type"] = "fullstack";
+      if (allContent.includes("docs/") || allContent.includes("documentation")) {
+        type = "docs";
+      } else if (allContent.includes("api") || allContent.includes("backend") || allContent.includes("convex")) {
+        type = allContent.includes("component") || allContent.includes("frontend") ? "fullstack" : "backend";
+      } else if (allContent.includes("component") || allContent.includes("frontend") || allContent.includes(".tsx")) {
+        type = "frontend";
+      }
+      
+      return {
+        id: defaultId,
+        title,
+        context: context.trim(),
+        task: task.trim(),
+        type,
+        requiredReading,
+        newInShard: [],
+        acceptanceCriteria,
+        creates,
+        dependsOn,
+        modifies,
+      };
+    } catch {
+      return null;
+    }
   };
 
   // Load global design templates
@@ -973,6 +1109,14 @@ ${shard.acceptanceCriteria.map((c) => `- [ ] ${c}`).join("\n")}
             onBack();
           } else if (value === "current") {
             setSelectedProjectPath(projectPath);
+            // Check for existing shards first
+            const existingShardsResult = await checkExistingShards(projectPath);
+            if (existingShardsResult) {
+              setExistingShards(existingShardsResult.shards);
+              setExistingSprintName(existingShardsResult.sprintName);
+              setStep("existing-shards");
+              return;
+            }
             // Check if current project has PRD
             const hasPrdResult = await hasPrd(projectPath);
             setProjectHasPrd(hasPrdResult);
@@ -987,6 +1131,14 @@ ${shard.acceptanceCriteria.map((c) => `- [ ] ${c}`).join("\n")}
             const newPath = join(projectsDir, projectName);
             setSelectedProjectPath(newPath);
             onProjectPathChange?.(newPath);
+            // Check for existing shards first
+            const existingShardsResult = await checkExistingShards(newPath);
+            if (existingShardsResult) {
+              setExistingShards(existingShardsResult.shards);
+              setExistingSprintName(existingShardsResult.sprintName);
+              setStep("existing-shards");
+              return;
+            }
             // Check if project has PRD
             const hasPrdResult = await hasPrd(newPath);
             setProjectHasPrd(hasPrdResult);
@@ -1042,6 +1194,91 @@ ${shard.acceptanceCriteria.map((c) => `- [ ] ${c}`).join("\n")}
                   setLoading(false);
                   // New projects always need PRD Q&A
                   setStep("prd-qa");
+                }}
+                onCancel={() => setStep("select-project")}
+              />
+            </Box>
+          </Box>
+        );
+
+      case "existing-shards":
+        const existingShardMenuItems: MenuItem[] = [
+          {
+            label: "📝 Resume Review",
+            value: "resume",
+            hint: `Continue reviewing ${existingShards.length} shards from "${existingSprintName}"`,
+          },
+          {
+            label: "🔄 Regenerate Shards",
+            value: "regenerate",
+            hint: "Analyze PRD again and create new shards",
+          },
+          {
+            label: "🗑️ Start Fresh",
+            value: "fresh",
+            hint: "Ignore existing shards and start a new sprint",
+          },
+          {
+            label: "← Back",
+            value: "back",
+          },
+        ];
+
+        return (
+          <Box flexDirection="column">
+            <Text bold color="cyan">Existing Shards Detected</Text>
+            <Text color="yellow">
+              Found {existingShards.length} shards in sprint "{existingSprintName}"
+            </Text>
+            <Box marginTop={1} flexDirection="column" paddingLeft={1}>
+              {existingShards.slice(0, 5).map((shard, i) => (
+                <Text key={i} color="gray">• {shard.id}: {shard.title}</Text>
+              ))}
+              {existingShards.length > 5 && (
+                <Text color="gray" dimColor>...and {existingShards.length - 5} more</Text>
+              )}
+            </Box>
+            <Box marginTop={1}>
+              <Menu
+                items={existingShardMenuItems}
+                onSelect={async (value) => {
+                  if (value === "back") {
+                    setStep("select-project");
+                  } else if (value === "resume") {
+                    // Load existing shards into sprint data and go to review
+                    setSprintData((prev) => ({
+                      ...prev,
+                      name: existingSprintName,
+                      shardDrafts: existingShards,
+                    }));
+                    setCurrentShardIndex(0);
+                    setStep("review-shards");
+                  } else if (value === "regenerate") {
+                    // Clear existing and regenerate from PRD
+                    setExistingShards([]);
+                    setSprintData((prev) => ({
+                      ...prev,
+                      name: existingSprintName,
+                      shardDrafts: [],
+                    }));
+                    // Check if PRD exists
+                    const hasPrdResult = await hasPrd(selectedProjectPath);
+                    if (hasPrdResult) {
+                      setProjectHasPrd(true);
+                      // Go directly to analyze PRD
+                      setStep("analyze-patterns");
+                      await runAnalyzePrd();
+                    } else {
+                      setProjectHasPrd(false);
+                      setStep("prd-qa");
+                    }
+                  } else if (value === "fresh") {
+                    // Ignore existing, start fresh sprint workflow
+                    setExistingShards([]);
+                    const hasPrdResult = await hasPrd(selectedProjectPath);
+                    setProjectHasPrd(hasPrdResult);
+                    setStep(hasPrdResult ? "sprint-type" : "prd-qa");
+                  }
                 }}
                 onCancel={() => setStep("select-project")}
               />
