@@ -46,6 +46,7 @@ export function App({ config, projectPath, configFile }: AppProps) {
   const [loading, setLoading] = useState(false);
   const [selectedShard, setSelectedShard] = useState<Shard | null>(null);
   const [chatPrompt, setChatPrompt] = useState<string | undefined>(undefined);
+  const [chatWorktreePath, setChatWorktreePath] = useState<string | undefined>(undefined);
   
   // Track running droids with their output buffers
   const [runningDroids, setRunningDroids] = useState<RunningDroid[]>([]);
@@ -146,10 +147,11 @@ export function App({ config, projectPath, configFile }: AppProps) {
     setScreen("shard-editor");
   }, []);
 
-  // Handle starting a droid chat for a shard
-  const handleStartChat = useCallback((shard: Shard, prompt?: string) => {
+  // Handle starting a droid chat for a shard (with worktree path for isolation)
+  const handleStartChat = useCallback((shard: Shard, prompt?: string, worktreePath?: string) => {
     setSelectedShard(shard);
     setChatPrompt(prompt);
+    setChatWorktreePath(worktreePath);
     setScreen("droid-chat");
   }, []);
 
@@ -287,11 +289,12 @@ export function App({ config, projectPath, configFile }: AppProps) {
         return (
           <DroidChat
             config={currentConfig}
-            projectPath={currentProjectPath}
+            projectPath={chatWorktreePath || currentProjectPath}
             shard={selectedShard || undefined}
             initialPrompt={chatPrompt}
             onBack={() => {
               setChatPrompt(undefined);
+              setChatWorktreePath(undefined);
               setScreen(selectedShard ? "continue-sprint" : "main");
             }}
             onComplete={(success) => {

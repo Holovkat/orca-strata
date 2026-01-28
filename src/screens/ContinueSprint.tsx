@@ -25,7 +25,7 @@ interface ContinueSprintProps {
   sprintStatus: SprintStatus | null;
   onBack: () => void;
   onStatusChange: (status: SprintStatus) => void;
-  onStartChat?: (shard: Shard, prompt?: string) => void;
+  onStartChat?: (shard: Shard, prompt?: string, worktreePath?: string) => void;
   // Running droids management (for background execution)
   runningDroids?: RunningDroid[];
   onAddRunningDroid?: (droid: RunningDroid) => void;
@@ -332,7 +332,7 @@ interface PhaseProps {
   setLoadingMessage: (msg: string) => void;
   setMessage: (msg: { type: "success" | "error" | "info"; text: string } | null) => void;
   appendDroidOutput?: (chunk: string) => void;
-  onStartChat?: (shard: Shard, prompt?: string) => void;
+  onStartChat?: (shard: Shard, prompt?: string, worktreePath?: string) => void;
 }
 
 interface BuildPhaseProps extends PhaseProps {
@@ -566,9 +566,50 @@ Begin implementation.`;
       const shard = sprintStatus.sprint.shards.find((s) => s.id === shardId);
       if (shard) {
         if (runMode === "interactive" && onStartChat) {
-          // Interactive mode - start chat
-          const shardContent = await readShard(join(projectPath, shard.file));
-          const prompt = `I'm working on shard: ${shard.title}
+          // Interactive mode - create worktree first, then start chat
+          setLoading(true);
+          setLoadingMessage(`Creating worktree for ${shard.title}...`);
+          
+          try {
+            const worktreePath = join(projectPath, config.paths.worktrees, shard.id);
+            const branchName = `${sprintStatus.sprint.branch}-${shard.id}`;
+            
+            // Determine base branch for stacking (same as auto mode)
+            let baseBranch: string | undefined;
+            if (shard.dependencies.length > 0) {
+              const completedDeps = shard.dependencies
+                .map(depId => sprintStatus.sprint.shards.find(s => s.id === depId))
+                .filter(s => s && (s.status === "Done" || s.status === "Ready for Review") && s.branch);
+              
+              if (completedDeps.length > 0) {
+                const lastDep = completedDeps[completedDeps.length - 1];
+                baseBranch = lastDep?.branch;
+              }
+            }
+            
+            // Create worktree
+            const worktreeResult = await createWorktreeWithNewBranch(worktreePath, branchName, projectPath, baseBranch);
+            
+            if (!worktreeResult.success) {
+              setMessage({ type: "error", text: `Failed to create worktree: ${worktreeResult.error}` });
+              setLoading(false);
+              return;
+            }
+            
+            // Update shard status to In Progress
+            const updatedShards = sprintStatus.sprint.shards.map((s) =>
+              s.id === shard.id ? { ...s, status: "In Progress" as ColumnName, worktree: worktreePath, branch: branchName } : s
+            );
+            
+            onStatusChange({
+              ...sprintStatus,
+              sprint: { ...sprintStatus.sprint, shards: updatedShards },
+              counts: calculateCounts(updatedShards),
+            });
+            
+            // Read shard content for prompt
+            const shardContent = await readShard(join(projectPath, shard.file));
+            const prompt = `I'm working on shard: ${shard.title}
 
 Please read the shard file at ${shard.file} and help me implement it.
 
@@ -578,8 +619,22 @@ ${shardContent?.task || "See shard file for details."}
 ## Acceptance Criteria
 ${shardContent?.acceptanceCriteria.map((c) => `- ${c}`).join("\n") || "See shard file"}
 
+## Working Directory
+You are working in an isolated worktree: ${worktreePath}
+Branch: ${branchName}
+${baseBranch ? `Stacked from: ${baseBranch}` : ""}
+
+All changes should be committed to this worktree when complete.
+
 Let's start by reviewing the requirements and then implementing step by step.`;
-          onStartChat(shard, prompt);
+            
+            setLoading(false);
+            // Pass worktree path to chat
+            onStartChat(shard, prompt, worktreePath);
+          } catch (err) {
+            setMessage({ type: "error", text: err instanceof Error ? err.message : "Failed to start interactive mode" });
+            setLoading(false);
+          }
         } else {
           // Auto mode - run headless
           await startShard(shard);
