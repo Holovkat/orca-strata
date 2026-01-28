@@ -205,8 +205,7 @@ Dependent shards: ${dependentShards.map(s => s.id).join(", ") || "None"}
 Provide a brief impact summary, affected dependencies, and recommendation.`;
 
       const result = await invokeDroid(
-        { droid: "technical-analyst", prompt, autoLevel: "low", cwd: projectPath },
-        config,
+        { droid: "technical-analyst", prompt, autoLevel: "low", model: config.droids.model, cwd: projectPath },
         (chunk) => setDroidOutput((prev) => prev + chunk)
       );
 
