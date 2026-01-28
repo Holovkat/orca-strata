@@ -128,10 +128,16 @@ export function DroidChat({
     }
   }, [input, isWaiting, sendMessage]);
 
+  // Track focused message for Tab navigation
+  const [focusedMessage, setFocusedMessage] = useState<number | null>(null);
+
   useInput((char, key) => {
     if (key.escape) {
       if (expandedMessage !== null) {
         setExpandedMessage(null);
+        setFocusedMessage(null);
+      } else if (focusedMessage !== null) {
+        setFocusedMessage(null);
       } else {
         onBack();
       }
@@ -139,12 +145,25 @@ export function DroidChat({
     if (key.ctrl && char === "c") {
       onBack();
     }
-    // Number keys 1-9 to expand message
-    if (!isWaiting && char >= "1" && char <= "9") {
-      const idx = parseInt(char) - 1;
-      if (idx < messages.length) {
-        setExpandedMessage(expandedMessage === idx ? null : idx);
+    // Tab to cycle through messages (only when input is empty)
+    if (key.tab && !key.shift && input === "" && !isWaiting && messages.length > 0) {
+      if (focusedMessage === null) {
+        setFocusedMessage(messages.length - 1);
+      } else {
+        setFocusedMessage((focusedMessage + 1) % messages.length);
       }
+    }
+    // Shift+Tab to cycle backwards
+    if (key.tab && key.shift && input === "" && !isWaiting && messages.length > 0) {
+      if (focusedMessage === null) {
+        setFocusedMessage(messages.length - 1);
+      } else {
+        setFocusedMessage((focusedMessage - 1 + messages.length) % messages.length);
+      }
+    }
+    // Enter to expand focused message (when not typing)
+    if (key.return && input === "" && focusedMessage !== null && !isWaiting) {
+      setExpandedMessage(focusedMessage);
     }
   });
 
@@ -154,7 +173,7 @@ export function DroidChat({
     return (
       <Box flexDirection="column" padding={1}>
         <Text bold color="cyan">Full Message ({msg.role})</Text>
-        <Text color="gray" dimColor>Press Esc to go back, or number key to view another message</Text>
+        <Text color="gray" dimColor>Press Esc to go back</Text>
         <Box marginTop={1} flexDirection="column">
           {msg.role === "assistant" ? (
             <Markdown>{msg.content}</Markdown>
@@ -194,6 +213,7 @@ export function DroidChat({
               message={msg} 
               index={globalIdx + 1}
               maxLines={maxLines}
+              focused={focusedMessage === globalIdx}
             />
           );
         })}
@@ -229,7 +249,11 @@ export function DroidChat({
 
       {/* Footer */}
       <Box marginTop={1}>
-        <Text color="gray">Enter send • Esc exit • 1-9 expand message</Text>
+        <Text color="gray">
+          {focusedMessage !== null 
+            ? `Message ${focusedMessage + 1} selected • Enter expand • Tab next • Esc cancel`
+            : "Enter send • Tab select message • Esc exit"}
+        </Text>
       </Box>
     </Box>
   );
@@ -239,9 +263,10 @@ interface MessageBubbleProps {
   message: ChatMessage;
   index: number;
   maxLines: number;
+  focused?: boolean;
 }
 
-function MessageBubble({ message, index, maxLines }: MessageBubbleProps) {
+function MessageBubble({ message, index, maxLines, focused }: MessageBubbleProps) {
   const roleIcons: Record<string, string> = {
     user: "◇",
     assistant: "◆",
@@ -250,6 +275,7 @@ function MessageBubble({ message, index, maxLines }: MessageBubbleProps) {
 
   const icon = roleIcons[message.role] || "•";
   const linesToShow = Math.min(maxLines, 15);
+  const focusIndicator = focused ? "▶ " : "";
 
   // For assistant messages, use markdown rendering
   if (message.role === "assistant") {
@@ -258,13 +284,13 @@ function MessageBubble({ message, index, maxLines }: MessageBubbleProps) {
     
     return (
       <Box marginY={0} flexDirection="column">
-        <Text color="green">
-          {icon} [{index}] Droid
+        <Text color={focused ? "cyan" : "green"} bold={focused}>
+          {focusIndicator}{icon} [{index}] Droid
         </Text>
         <Box marginLeft={2} flexDirection="column">
           <Markdown maxLines={linesToShow}>{message.content}</Markdown>
           {hasMore && (
-            <Text color="yellow">{`... (${lines.length - linesToShow} more lines - press ${index} to expand)`}</Text>
+            <Text color="yellow">{`... (${lines.length - linesToShow} more lines)`}</Text>
           )}
         </Box>
       </Box>
@@ -272,7 +298,8 @@ function MessageBubble({ message, index, maxLines }: MessageBubbleProps) {
   }
 
   // For user/system messages, simple text
-  const color = message.role === "user" ? "blue" : "gray";
+  const baseColor = message.role === "user" ? "blue" : "gray";
+  const color = focused ? "cyan" : baseColor;
   const label = message.role === "user" ? "You" : "System";
   const lines = message.content.split("\n");
   const displayLines = lines.slice(0, linesToShow);
@@ -280,14 +307,14 @@ function MessageBubble({ message, index, maxLines }: MessageBubbleProps) {
 
   return (
     <Box marginY={0} flexDirection="column">
-      <Text color={color}>
-        {icon} [{index}] {label}
+      <Text color={color} bold={focused}>
+        {focusIndicator}{icon} [{index}] {label}
       </Text>
       <Box marginLeft={2}>
-        <Text color={color} wrap="wrap">
+        <Text color={baseColor} wrap="wrap">
           {displayLines.join("\n")}
           {hasMore && (
-            <Text color="yellow">{`\n... (${lines.length - linesToShow} more lines - press ${index} to expand)`}</Text>
+            <Text color="yellow">{`\n... (${lines.length - linesToShow} more lines)`}</Text>
           )}
         </Text>
       </Box>
