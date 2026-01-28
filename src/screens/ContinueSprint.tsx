@@ -391,12 +391,29 @@ function BuildPhase({
       const worktreePath = join(projectPath, config.paths.worktrees, shard.id);
       const branchName = `${sprintStatus.sprint.branch}-${shard.id}`;
 
+      // Determine base branch for stacking: if shard has dependencies, 
+      // branch from the last completed dependency (Graphite-style stacking)
+      let baseBranch: string | undefined;
+      if (shard.dependencies.length > 0) {
+        // Find completed dependencies and get the last one's branch
+        const completedDeps = shard.dependencies
+          .map(depId => sprintStatus.sprint.shards.find(s => s.id === depId))
+          .filter(s => s && (s.status === "Done" || s.status === "Ready for Review") && s.branch);
+        
+        if (completedDeps.length > 0) {
+          // Use the last dependency's branch as base
+          const lastDep = completedDeps[completedDeps.length - 1];
+          baseBranch = lastDep?.branch;
+          appendDroidOutput?.(`[Stacking from dependency: ${lastDep?.id} (${baseBranch})]\n`);
+        }
+      }
+
       setLoadingMessage(`Creating worktree for ${shard.id}...`);
       
       // Enable git debug output
       setGitDebugCallback((msg) => appendDroidOutput?.(msg));
       
-      const worktreeResult = await createWorktreeWithNewBranch(worktreePath, branchName, projectPath);
+      const worktreeResult = await createWorktreeWithNewBranch(worktreePath, branchName, projectPath, baseBranch);
       
       // Disable git debug after worktree creation
       setGitDebugCallback(null);
