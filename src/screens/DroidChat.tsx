@@ -40,8 +40,9 @@ export function DroidChat({
   const { stdout } = useStdout();
 
   const terminalHeight = stdout?.rows || 40;
-  // Reserve space for header (3), input (3), footer (1), margins
-  const chatAreaHeight = Math.max(10, terminalHeight - 10);
+  // Fixed heights: header=3, error=1 (if shown), input=3, footer=1
+  const fixedHeight = 7 + (error ? 1 : 0);
+  const chatAreaHeight = Math.max(5, terminalHeight - fixedHeight);
 
   // Send initial prompt on mount
   useEffect(() => {
@@ -203,36 +204,31 @@ export function DroidChat({
         </Box>
       )}
 
-      {/* Scrollable Chat Area */}
-      <Box flexDirection="column" flexGrow={1} overflow="hidden">
+      {/* Scrollable Chat Area - fixed height */}
+      <Box flexDirection="column" height={chatAreaHeight} overflow="hidden">
         {scrollOffset > 0 && (
           <Text color="yellow" dimColor>↑ {scrollOffset} more lines above (↑/↓ to scroll)</Text>
         )}
-        <Box flexDirection="column" flexGrow={1}>
-          {visibleLines.map((line, i) => {
-            // Color code based on line content
-            let color: string | undefined;
-            if (line.startsWith("◇ You:")) color = "blue";
-            else if (line.startsWith("◆ Droid:")) color = "green";
-            else if (line.startsWith("● System:")) color = "gray";
-            else if (line.startsWith("  ")) color = undefined; // Content lines
-            
-            return (
-              <Text key={startLine + i} color={color} wrap="truncate">
-                {line}
-              </Text>
-            );
-          })}
-        </Box>
-        {startLine > 0 && scrollOffset < maxScroll && (
-          <Text color="yellow" dimColor>↓ more below</Text>
+        {visibleLines.map((line, i) => {
+          // Color code based on line content
+          let color: string | undefined;
+          if (line.startsWith("◇ You:")) color = "blue";
+          else if (line.startsWith("◆ Droid:")) color = "green";
+          else if (line.startsWith("● System:")) color = "gray";
+          
+          return (
+            <Text key={startLine + i} color={color} wrap="truncate">
+              {line}
+            </Text>
+          );
+        })}
+        {scrollOffset < maxScroll && maxScroll > 0 && (
+          <Text color="yellow" dimColor>↓ {maxScroll - scrollOffset} more lines below</Text>
         )}
         
         {/* Waiting indicator */}
         {isWaiting && !currentResponse && (
-          <Box flexShrink={0}>
-            <Spinner message="Thinking..." />
-          </Box>
+          <Spinner message="Thinking..." />
         )}
       </Box>
 
