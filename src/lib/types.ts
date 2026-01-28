@@ -7,7 +7,8 @@ export type Screen =
   | "manual-actions"
   | "settings"
   | "shard-editor"
-  | "droid-chat";
+  | "droid-chat"
+  | "droid-viewer";
 
 export type Phase =
   | "planning"
@@ -111,6 +112,14 @@ export interface ActiveDroid {
   droid: string;
   status: "running" | "complete" | "failed";
   startedAt: Date;
+}
+
+export interface RunningDroid extends ActiveDroid {
+  shardTitle: string;
+  output: string;
+  minimized: boolean;
+  completedAt?: Date;
+  exitCode?: number;
 }
 
 export interface Question {
