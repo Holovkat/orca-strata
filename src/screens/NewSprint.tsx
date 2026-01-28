@@ -130,25 +130,27 @@ export function NewSprint({
           if (stats?.isDirectory() && !entry.startsWith(".")) {
             dirs.push(entry);
             
-            // Check for shards in this project
+            // Check for shards in this project (in features/<sprint>/ folders)
             try {
-              const sprintsDir = join(fullPath, "features", "sprints");
-              const sprintEntries = await readdir(sprintsDir).catch(() => []);
+              const featuresDir = join(fullPath, "features");
+              const featureEntries = await readdir(featuresDir).catch(() => []);
               
-              for (const sprintEntry of sprintEntries) {
-                const sprintPath = join(sprintsDir, sprintEntry);
-                const sprintStat = await stat(sprintPath).catch(() => null);
-                if (sprintStat?.isDirectory() && !sprintEntry.startsWith(".")) {
-                  const shardFiles = await readdir(sprintPath).catch(() => []);
-                  const mdFiles = shardFiles.filter(f => f.endsWith(".md") && !f.startsWith("."));
+              for (const featureEntry of featureEntries) {
+                if (featureEntry === "sprints" || featureEntry === "prd.md" || featureEntry.startsWith(".")) continue;
+                
+                const featurePath = join(featuresDir, featureEntry);
+                const featureStat = await stat(featurePath).catch(() => null);
+                if (featureStat?.isDirectory()) {
+                  const shardFiles = await readdir(featurePath).catch(() => []);
+                  const mdFiles = shardFiles.filter(f => f.startsWith("shard-") && f.endsWith(".md"));
                   if (mdFiles.length > 0) {
-                    shardCounts.set(entry, { count: mdFiles.length, sprint: sprintEntry });
+                    shardCounts.set(entry, { count: mdFiles.length, sprint: featureEntry });
                     break; // Use the first sprint found with shards
                   }
                 }
               }
             } catch {
-              // No sprints folder or other error
+              // No features folder or other error
             }
           }
         }
@@ -417,28 +419,35 @@ Return ONLY the JSON object, no other text.`;
     }));
   };
 
-  // Check for existing shards in a project's features/sprints folder
+  // Check for existing shards in a project's features folder
   const checkExistingShards = async (projectDir: string): Promise<{ sprintName: string; shards: ShardDraft[] } | null> => {
     try {
       const { readdir, readFile, stat } = await import("fs/promises");
-      const sprintsDir = join(projectDir, "features", "sprints");
+      // Look in features/ directly (not features/sprints/)
+      const featuresDir = join(projectDir, config.paths.features);
       
-      // Check if sprints directory exists
+      // Check if features directory exists
       try {
-        await stat(sprintsDir);
+        await stat(featuresDir);
       } catch {
         return null;
       }
       
-      // Find sprint folders
-      const entries = await readdir(sprintsDir);
+      // Find sprint folders (directories with shard-*.md files)
+      const entries = await readdir(featuresDir);
       const sprintFolders: string[] = [];
       
       for (const entry of entries) {
-        const entryPath = join(sprintsDir, entry);
-        const entryStat = await stat(entryPath);
-        if (entryStat.isDirectory() && !entry.startsWith(".")) {
-          sprintFolders.push(entry);
+        if (entry === "sprints" || entry === "prd.md" || entry.startsWith(".")) continue;
+        
+        const entryPath = join(featuresDir, entry);
+        const entryStat = await stat(entryPath).catch(() => null);
+        if (entryStat?.isDirectory()) {
+          // Check if it contains shard files
+          const files = await readdir(entryPath).catch(() => []);
+          if (files.some(f => f.startsWith("shard-") && f.endsWith(".md"))) {
+            sprintFolders.push(entry);
+          }
         }
       }
       
@@ -446,7 +455,7 @@ Return ONLY the JSON object, no other text.`;
       
       // Get the most recent sprint folder (alphabetically last, assuming naming convention)
       const latestSprint = sprintFolders.sort().pop()!;
-      const sprintPath = join(sprintsDir, latestSprint);
+      const sprintPath = join(featuresDir, latestSprint);
       
       // Read shard files
       const shardFiles = await readdir(sprintPath);
@@ -551,7 +560,8 @@ Return ONLY the JSON object, no other text.`;
   // Save shard drafts to disk so they persist if app exits
   const saveShardDrafts = async (shards: ShardDraft[], sprintName: string): Promise<void> => {
     try {
-      const sprintDir = join(selectedProjectPath, "features", "sprints", sprintName);
+      // Use the same path structure as createShard: features/<sprint-name>/
+      const sprintDir = join(selectedProjectPath, config.paths.features, sprintName.toLowerCase().replace(/\s+/g, "-"));
       await mkdir(sprintDir, { recursive: true });
       
       for (const shard of shards) {
