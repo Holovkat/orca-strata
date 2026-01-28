@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Box, Text, useInput, useStdout } from "ink";
 import TextInput from "ink-text-input";
 import { Spinner } from "../components/Spinner.js";
@@ -36,12 +36,12 @@ export function DroidChat({
   const [currentResponse, setCurrentResponse] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [conversationHistory, setConversationHistory] = useState<string>("");
-  const [expandedMessage, setExpandedMessage] = useState<number | null>(null);
+  const [scrollOffset, setScrollOffset] = useState(0);
   const { stdout } = useStdout();
 
-  // Calculate visible lines based on terminal height
   const terminalHeight = stdout?.rows || 40;
-  const maxLines = Math.max(15, terminalHeight - 10);
+  // Reserve space for header (3), input (3), footer (1), margins
+  const chatAreaHeight = Math.max(10, terminalHeight - 10);
 
   // Send initial prompt on mount
   useEffect(() => {
@@ -54,12 +54,11 @@ export function DroidChat({
         timestamp: new Date(),
       }]);
     }
-  }, []); // Only run once on mount
+  }, []);
 
   const sendMessage = useCallback(async (content: string) => {
     if (!content.trim()) return;
 
-    // Add user message
     const userMessage: ChatMessage = {
       role: "user",
       content,
@@ -69,17 +68,16 @@ export function DroidChat({
     setIsWaiting(true);
     setCurrentResponse("");
     setError(null);
-    setExpandedMessage(null);
+    setScrollOffset(0); // Reset scroll to bottom on new message
 
     try {
-      // Build context with conversation history
       const contextPrompt = conversationHistory
         ? `Previous conversation:\n${conversationHistory}\n\nUser: ${content}`
         : content;
 
       const result = await invokeDroid(
         {
-          droid: "assistant", // Generic assistant mode
+          droid: "assistant",
           prompt: contextPrompt,
           autoLevel: config.droids.auto_level,
           model: config.droids.model,
@@ -91,7 +89,6 @@ export function DroidChat({
         }
       );
 
-      // Add assistant message
       const assistantMessage: ChatMessage = {
         role: "assistant",
         content: result.output || currentResponse,
@@ -99,7 +96,6 @@ export function DroidChat({
       };
       setMessages(prev => [...prev, assistantMessage]);
 
-      // Update conversation history for context
       setConversationHistory(prev => 
         prev + `\nUser: ${content}\nAssistant: ${result.output || currentResponse}`
       );
@@ -128,72 +124,72 @@ export function DroidChat({
     }
   }, [input, isWaiting, sendMessage]);
 
-  // Track focused message for Tab navigation
-  const [focusedMessage, setFocusedMessage] = useState<number | null>(null);
+  // Build full chat content as lines
+  const buildChatLines = (): string[] => {
+    const lines: string[] = [];
+    
+    for (const msg of messages) {
+      const icon = msg.role === "user" ? "◇" : msg.role === "assistant" ? "◆" : "●";
+      const label = msg.role === "user" ? "You" : msg.role === "assistant" ? "Droid" : "System";
+      const color = msg.role === "user" ? "blue" : msg.role === "assistant" ? "green" : "gray";
+      
+      lines.push(`${icon} ${label}:`);
+      const contentLines = msg.content.split("\n");
+      for (const line of contentLines) {
+        lines.push(`  ${line}`);
+      }
+      lines.push(""); // Empty line between messages
+    }
+    
+    // Add current streaming response
+    if (currentResponse) {
+      lines.push("◆ Droid:");
+      const responseLines = currentResponse.split("\n");
+      for (const line of responseLines) {
+        lines.push(`  ${line}`);
+      }
+    }
+    
+    return lines;
+  };
+
+  const chatLines = buildChatLines();
+  const totalLines = chatLines.length;
+  const maxScroll = Math.max(0, totalLines - chatAreaHeight);
 
   useInput((char, key) => {
     if (key.escape) {
-      if (expandedMessage !== null) {
-        setExpandedMessage(null);
-        setFocusedMessage(null);
-      } else if (focusedMessage !== null) {
-        setFocusedMessage(null);
-      } else {
-        onBack();
-      }
+      onBack();
     }
     if (key.ctrl && char === "c") {
       onBack();
     }
-    // Tab to cycle through messages (only when input is empty)
-    if (key.tab && !key.shift && input === "" && !isWaiting && messages.length > 0) {
-      if (focusedMessage === null) {
-        setFocusedMessage(messages.length - 1);
-      } else {
-        setFocusedMessage((focusedMessage + 1) % messages.length);
+    // Scroll up/down with arrow keys (when input is empty)
+    if (input === "" && !isWaiting) {
+      if (key.upArrow) {
+        setScrollOffset(prev => Math.min(prev + 3, maxScroll));
       }
-    }
-    // Shift+Tab to cycle backwards
-    if (key.tab && key.shift && input === "" && !isWaiting && messages.length > 0) {
-      if (focusedMessage === null) {
-        setFocusedMessage(messages.length - 1);
-      } else {
-        setFocusedMessage((focusedMessage - 1 + messages.length) % messages.length);
+      if (key.downArrow) {
+        setScrollOffset(prev => Math.max(prev - 3, 0));
       }
-    }
-    // Enter to expand focused message (when not typing)
-    if (key.return && input === "" && focusedMessage !== null && !isWaiting) {
-      setExpandedMessage(focusedMessage);
+      // Page up/down
+      if (key.pageUp) {
+        setScrollOffset(prev => Math.min(prev + chatAreaHeight, maxScroll));
+      }
+      if (key.pageDown) {
+        setScrollOffset(prev => Math.max(prev - chatAreaHeight, 0));
+      }
     }
   });
 
-  // If a message is expanded, show it full screen with markdown
-  if (expandedMessage !== null && messages[expandedMessage]) {
-    const msg = messages[expandedMessage];
-    return (
-      <Box flexDirection="column" padding={1}>
-        <Text bold color="cyan">Full Message ({msg.role})</Text>
-        <Text color="gray" dimColor>Press Esc to go back</Text>
-        <Box marginTop={1} flexDirection="column">
-          {msg.role === "assistant" ? (
-            <Markdown>{msg.content}</Markdown>
-          ) : (
-            <Text color={msg.role === "user" ? "blue" : "gray"} wrap="wrap">
-              {msg.content}
-            </Text>
-          )}
-        </Box>
-      </Box>
-    );
-  }
-
-  // Show last few messages based on terminal height
-  const recentMessages = messages.slice(-5);
+  // Calculate visible lines (from bottom, with scroll offset)
+  const startLine = Math.max(0, totalLines - chatAreaHeight - scrollOffset);
+  const visibleLines = chatLines.slice(startLine, startLine + chatAreaHeight);
 
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" height={terminalHeight - 1}>
       {/* Header */}
-      <Box marginBottom={1} flexDirection="column">
+      <Box marginBottom={1} flexDirection="column" flexShrink={0}>
         <Box gap={2}>
           <Text bold color="cyan">Droid Chat</Text>
           {shard && <Text color="gray">Shard: {shard.title}</Text>}
@@ -201,43 +197,47 @@ export function DroidChat({
         <Text color="gray" dimColor>Model: {config.droids.model} | Auto: {config.droids.auto_level}</Text>
       </Box>
 
-      {error && <StatusMessage type="error" message={error} />}
+      {error && (
+        <Box flexShrink={0}>
+          <StatusMessage type="error" message={error} />
+        </Box>
+      )}
 
-      {/* Messages */}
-      <Box flexDirection="column" marginBottom={1}>
-        {recentMessages.map((msg, i) => {
-          const globalIdx = messages.length - recentMessages.length + i;
-          return (
-            <MessageBubble 
-              key={globalIdx} 
-              message={msg} 
-              index={globalIdx + 1}
-              maxLines={maxLines}
-              focused={focusedMessage === globalIdx}
-            />
-          );
-        })}
-
-        {/* Current streaming response */}
-        {currentResponse && (
-          <Box marginY={1} flexDirection="column">
-            <Text color="green">◆ Droid:</Text>
-            <Box marginLeft={2}>
-              <Markdown maxLines={20}>{currentResponse}</Markdown>
-            </Box>
-          </Box>
+      {/* Scrollable Chat Area */}
+      <Box flexDirection="column" flexGrow={1} overflow="hidden">
+        {scrollOffset > 0 && (
+          <Text color="yellow" dimColor>↑ {scrollOffset} more lines above (↑/↓ to scroll)</Text>
         )}
-
+        <Box flexDirection="column" flexGrow={1}>
+          {visibleLines.map((line, i) => {
+            // Color code based on line content
+            let color: string | undefined;
+            if (line.startsWith("◇ You:")) color = "blue";
+            else if (line.startsWith("◆ Droid:")) color = "green";
+            else if (line.startsWith("● System:")) color = "gray";
+            else if (line.startsWith("  ")) color = undefined; // Content lines
+            
+            return (
+              <Text key={startLine + i} color={color} wrap="truncate">
+                {line}
+              </Text>
+            );
+          })}
+        </Box>
+        {startLine > 0 && scrollOffset < maxScroll && (
+          <Text color="yellow" dimColor>↓ more below</Text>
+        )}
+        
         {/* Waiting indicator */}
         {isWaiting && !currentResponse && (
-          <Box marginY={1}>
+          <Box flexShrink={0}>
             <Spinner message="Thinking..." />
           </Box>
         )}
       </Box>
 
       {/* Input */}
-      <Box borderStyle="single" borderColor="cyan" paddingX={1}>
+      <Box borderStyle="single" borderColor="cyan" paddingX={1} flexShrink={0}>
         <Text color="cyan">You: </Text>
         <TextInput
           value={input}
@@ -248,75 +248,8 @@ export function DroidChat({
       </Box>
 
       {/* Footer */}
-      <Box marginTop={1}>
-        <Text color="gray">
-          {focusedMessage !== null 
-            ? `Message ${focusedMessage + 1} selected • Enter expand • Tab next • Esc cancel`
-            : "Enter send • Tab select message • Esc exit"}
-        </Text>
-      </Box>
-    </Box>
-  );
-}
-
-interface MessageBubbleProps {
-  message: ChatMessage;
-  index: number;
-  maxLines: number;
-  focused?: boolean;
-}
-
-function MessageBubble({ message, index, maxLines, focused }: MessageBubbleProps) {
-  const roleIcons: Record<string, string> = {
-    user: "◇",
-    assistant: "◆",
-    system: "●",
-  };
-
-  const icon = roleIcons[message.role] || "•";
-  const linesToShow = Math.min(maxLines, 15);
-  const focusIndicator = focused ? "▶ " : "";
-
-  // For assistant messages, use markdown rendering
-  if (message.role === "assistant") {
-    const lines = message.content.split("\n");
-    const hasMore = lines.length > linesToShow;
-    
-    return (
-      <Box marginY={0} flexDirection="column">
-        <Text color={focused ? "cyan" : "green"} bold={focused}>
-          {focusIndicator}{icon} [{index}] Droid
-        </Text>
-        <Box marginLeft={2} flexDirection="column">
-          <Markdown maxLines={linesToShow}>{message.content}</Markdown>
-          {hasMore && (
-            <Text color="yellow">{`... (${lines.length - linesToShow} more lines)`}</Text>
-          )}
-        </Box>
-      </Box>
-    );
-  }
-
-  // For user/system messages, simple text
-  const baseColor = message.role === "user" ? "blue" : "gray";
-  const color = focused ? "cyan" : baseColor;
-  const label = message.role === "user" ? "You" : "System";
-  const lines = message.content.split("\n");
-  const displayLines = lines.slice(0, linesToShow);
-  const hasMore = lines.length > linesToShow;
-
-  return (
-    <Box marginY={0} flexDirection="column">
-      <Text color={color} bold={focused}>
-        {focusIndicator}{icon} [{index}] {label}
-      </Text>
-      <Box marginLeft={2}>
-        <Text color={baseColor} wrap="wrap">
-          {displayLines.join("\n")}
-          {hasMore && (
-            <Text color="yellow">{`\n... (${lines.length - linesToShow} more lines)`}</Text>
-          )}
-        </Text>
+      <Box flexShrink={0}>
+        <Text color="gray">Enter send • ↑↓ scroll • Esc exit</Text>
       </Box>
     </Box>
   );
