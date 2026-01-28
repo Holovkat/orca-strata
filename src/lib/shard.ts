@@ -402,3 +402,39 @@ ${acceptanceCriteriaList}
 \`${shard.metadata.title}\`
 `;
 }
+
+/**
+ * Mark a shard as deprecated by prepending deprecation notice
+ */
+export async function deprecateShard(
+  filePath: string,
+  reason: string,
+  analysis: string
+): Promise<void> {
+  const content = await readFile(filePath, "utf-8");
+  
+  const deprecationNotice = `> **⚠️ DEPRECATED**
+> 
+> **Reason:** ${reason}
+> 
+> **Date:** ${new Date().toISOString().split("T")[0]}
+> 
+> **Impact Analysis:**
+> ${analysis.split("\n").map(line => `> ${line}`).join("\n")}
+
+---
+
+`;
+
+  const updatedContent = deprecationNotice + content;
+  await writeFile(filePath, updatedContent, "utf-8");
+  
+  // Rename file to indicate deprecated status
+  const { dirname: getDirname, basename: getBasename } = await import("path");
+  const dir = getDirname(filePath);
+  const base = getBasename(filePath);
+  const newPath = join(dir, `DEPRECATED-${base}`);
+  
+  const { rename } = await import("fs/promises");
+  await rename(filePath, newPath);
+}

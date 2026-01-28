@@ -4,8 +4,11 @@ import TextInput from "ink-text-input";
 import { Spinner } from "../components/Spinner.js";
 import { StatusMessage } from "../components/StatusMessage.js";
 import { Menu } from "../components/Menu.js";
-import { readShard, updateShard } from "../lib/shard.js";
+import { QuestionPrompt } from "../components/QuestionPrompt.js";
+import { readShard, updateShard, deprecateShard } from "../lib/shard.js";
 import { updateIssueLabels } from "../lib/github.js";
+import { invokeDroid } from "../lib/droid.js";
+import { scanForSprints } from "../lib/state.js";
 import type { Shard, OrcaConfig, ColumnName } from "../lib/types.js";
 import type { ParsedShard } from "../lib/shard.js";
 import { join } from "path";
@@ -17,9 +20,10 @@ interface ShardEditorProps {
   shard: Shard;
   onBack: () => void;
   onShardUpdated: (shard: Shard) => void;
+  onShardDeprecated?: (shardId: string) => void;
 }
 
-type EditorMode = "view" | "edit-context" | "edit-task" | "edit-criteria";
+type EditorMode = "view" | "edit-context" | "edit-task" | "edit-criteria" | "deprecate-reason" | "deprecate-review";
 
 export function ShardEditor({
   config,
@@ -27,6 +31,7 @@ export function ShardEditor({
   shard,
   onBack,
   onShardUpdated,
+  onShardDeprecated,
 }: ShardEditorProps) {
   const [mode, setMode] = useState<EditorMode>("view");
   const [loading, setLoading] = useState(true);
@@ -37,6 +42,11 @@ export function ShardEditor({
   
   // Edit buffers (single line for simplicity)
   const [editValue, setEditValue] = useState("");
+  
+  // Deprecation state
+  const [deprecateReason, setDeprecateReason] = useState("");
+  const [deprecateAnalysis, setDeprecateAnalysis] = useState("");
+  const [droidOutput, setDroidOutput] = useState("");
 
   // Load shard content
   useEffect(() => {
@@ -150,6 +160,101 @@ export function ShardEditor({
     }
   };
 
+  // Analyze deprecation impact
+  const analyzeDeprecation = async (reason: string) => {
+    setLoading(true);
+    setError(null);
+    setDroidOutput("");
+    
+    try {
+      // Load all sprints to find dependencies
+      const sprints = await scanForSprints(projectPath, config.paths.features);
+      const allShards: Shard[] = sprints.flatMap(s => s.shards);
+      
+      // Find shards that depend on this one
+      const dependentShards = allShards.filter(s => 
+        s.dependencies.includes(shard.id) && s.id !== shard.id
+      );
+      
+      const prompt = `You are analyzing the impact of deprecating a shard in a sprint.
+
+## Shard Being Deprecated
+ID: ${shard.id}
+Title: ${shard.title}
+Creates: ${shard.creates.join(", ") || "None"}
+Type: ${shard.type}
+
+## Reason for Deprecation
+${reason}
+
+## Shards That Depend on This One
+${dependentShards.length > 0 
+  ? dependentShards.map(s => `- ${s.id}: ${s.title} (depends on: ${s.dependencies.join(", ")})`).join("\n")
+  : "None"}
+
+## All Shards in Sprint
+${allShards.map(s => `- ${s.id}: ${s.title} [${s.type}] creates: ${s.creates.join(", ") || "none"}`).join("\n")}
+
+## Your Task
+Analyze the impact of deprecating this shard and provide:
+
+1. **Impact Summary**: What will be affected by removing this shard?
+2. **Dependency Adjustments**: Which shards need their dependencies updated?
+3. **Orphaned Work**: Are there any files/features that will no longer be created?
+4. **Recommendations**: Should the work be reassigned to another shard, or is it safe to remove?
+
+Provide a concise analysis (not a JSON response).`;
+
+      const result = await invokeDroid(
+        {
+          droid: "technical-analyst",
+          prompt,
+          autoLevel: "low",
+          cwd: projectPath,
+        },
+        config,
+        (chunk) => setDroidOutput((prev) => prev + chunk)
+      );
+
+      if (result.success) {
+        setDeprecateAnalysis(result.output);
+        setMode("deprecate-review");
+      } else {
+        setError("Failed to analyze deprecation impact");
+      }
+    } catch (err) {
+      setError(`Analysis failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Execute deprecation
+  const executeDeprecation = async () => {
+    setLoading(true);
+    setError(null);
+    
+    try {
+      const shardPath = join(projectPath, shard.file);
+      await deprecateShard(shardPath, deprecateReason, deprecateAnalysis);
+      
+      // Close issue if exists
+      if (shard.issueNumber) {
+        await updateIssueLabels(shard.issueNumber, "Done");
+      }
+      
+      setSuccess(`Shard ${shard.id} has been deprecated`);
+      onShardDeprecated?.(shard.id);
+      
+      // Go back after a brief delay
+      setTimeout(() => onBack(), 1500);
+    } catch (err) {
+      setError(`Failed to deprecate: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   if (loading) {
     return <Spinner message={`Loading shard: ${shard.title}...`} />;
   }
@@ -163,8 +268,80 @@ export function ShardEditor({
     );
   }
 
+  // Deprecation reason mode
+  if (mode === "deprecate-reason") {
+    return (
+      <Box flexDirection="column">
+        <Text bold color="red">Deprecate Shard: {shard.title}</Text>
+        <Text color="gray" dimColor>This will mark the shard as deprecated and analyze impact on other shards.</Text>
+        <Box marginTop={1}>
+          <QuestionPrompt
+            question="Why are you deprecating this shard? (e.g., 'feature no longer needed', 'merged with shard-05', 'scope changed')"
+            type="text"
+            onAnswer={(answer) => {
+              if (answer.trim()) {
+                setDeprecateReason(answer);
+                analyzeDeprecation(answer);
+              } else {
+                setMode("view");
+              }
+            }}
+            onCancel={() => setMode("view")}
+          />
+        </Box>
+        {droidOutput && (
+          <Box marginTop={1} flexDirection="column">
+            <Text color="yellow">Analyzing...</Text>
+            <Text color="gray">{droidOutput.slice(-200)}</Text>
+          </Box>
+        )}
+      </Box>
+    );
+  }
+
+  // Deprecation review mode
+  if (mode === "deprecate-review") {
+    return (
+      <Box flexDirection="column">
+        <Text bold color="red">Deprecation Impact Analysis</Text>
+        <Text color="gray" dimColor>Reason: {deprecateReason}</Text>
+        
+        <Box marginTop={1} flexDirection="column" borderStyle="single" borderColor="yellow" paddingX={1}>
+          <Text>{deprecateAnalysis.slice(0, 800)}</Text>
+          {deprecateAnalysis.length > 800 && <Text color="gray">... (truncated)</Text>}
+        </Box>
+        
+        {error && <StatusMessage type="error" message={error} />}
+        {success && <StatusMessage type="success" message={success} />}
+        
+        <Box marginTop={1}>
+          <Menu
+            items={[
+              { label: "✓ Confirm Deprecation", value: "confirm", hint: "Mark shard as deprecated" },
+              { label: "✗ Cancel", value: "cancel", hint: "Keep shard active" },
+            ]}
+            onSelect={(value) => {
+              if (value === "confirm") {
+                executeDeprecation();
+              } else {
+                setMode("view");
+                setDeprecateReason("");
+                setDeprecateAnalysis("");
+              }
+            }}
+            onCancel={() => {
+              setMode("view");
+              setDeprecateReason("");
+              setDeprecateAnalysis("");
+            }}
+          />
+        </Box>
+      </Box>
+    );
+  }
+
   // Edit modes - simple single line append
-  if (mode !== "view") {
+  if (mode.startsWith("edit-")) {
     const fieldName = mode === "edit-context" ? "context" : mode === "edit-task" ? "task" : "criterion";
     const field = mode === "edit-context" ? "context" : mode === "edit-task" ? "task" : "criteria";
     
@@ -245,6 +422,8 @@ export function ShardEditor({
           { label: "Add to Context", value: "edit-context" },
           { label: "Add to Task", value: "edit-task" },
           { label: "Add Acceptance Criterion", value: "edit-criteria" },
+          { label: "─────────────", value: "divider", disabled: true },
+          { label: "⚠️ Deprecate Shard", value: "deprecate-reason", hint: "Mark as deprecated with impact analysis" },
           { label: "Back", value: "back" },
         ]}
         onSelect={(value) => {
