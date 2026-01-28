@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Box, Text, useInput } from "ink";
+import { Box, Text, useInput, useStdout } from "ink";
 import TextInput from "ink-text-input";
 import { Spinner } from "../components/Spinner.js";
 import { StatusMessage } from "../components/StatusMessage.js";
@@ -363,79 +363,89 @@ Provide a concise analysis (not a JSON response).`;
     );
   }
 
-  // View mode
+  // View mode - constrained to terminal viewport
+  const { stdout } = useStdout();
+  const terminalHeight = stdout?.rows || 24;
+  const terminalWidth = stdout?.columns || 80;
+  
+  // Calculate how much space we have for content preview
+  // Reserve: header (3) + status (2) + menu (9) + padding (2) = ~16 lines
+  const contentHeight = Math.max(6, terminalHeight - 16);
+  const previewMaxChars = Math.min(300, (terminalWidth - 4) * Math.floor(contentHeight / 3));
+  
   return (
-    <Box flexDirection="column">
-      <Box marginBottom={1}>
-        <Text bold color="cyan">{parsedShard.metadata.title}</Text>
-        <Text color="gray"> ({shard.id})</Text>
+    <Box flexDirection="column" height={terminalHeight - 1}>
+      {/* Header - fixed */}
+      <Box flexDirection="column" flexShrink={0}>
+        <Box marginBottom={1}>
+          <Text bold color="cyan">{truncate(parsedShard.metadata.title, terminalWidth - 20)}</Text>
+          <Text color="gray"> ({shard.id})</Text>
+        </Box>
+
+        {/* Status */}
+        <Box>
+          <Text>Status: </Text>
+          <Text color={getStatusColor(shard.status)}>{shard.status}</Text>
+          {shard.issueNumber && (
+            <Text color="gray"> • Issue #{shard.issueNumber}</Text>
+          )}
+          <Text color="gray"> • Type: {shard.type}</Text>
+        </Box>
+        
+        {error && <StatusMessage type="error" message={error} />}
+        {success && <StatusMessage type="success" message={success} />}
       </Box>
 
-      {/* Status */}
-      <Box marginBottom={1}>
-        <Text>Status: </Text>
-        <Text color={getStatusColor(shard.status)}>{shard.status}</Text>
-        {shard.issueNumber && (
-          <Text color="gray"> • Issue #{shard.issueNumber}</Text>
-        )}
+      {/* Content Preview - flexible, constrained */}
+      <Box flexDirection="column" flexGrow={1} overflow="hidden" marginY={1}>
+        {/* Context - compact */}
+        <Box flexDirection="column">
+          <Text bold color="gray">Context:</Text>
+          <Text color="white" wrap="truncate-end">{truncate(parsedShard.context, previewMaxChars)}</Text>
+        </Box>
+
+        {/* Task - compact */}
+        <Box flexDirection="column" marginTop={1}>
+          <Text bold color="gray">Task:</Text>
+          <Text color="white" wrap="truncate-end">{truncate(parsedShard.task, previewMaxChars)}</Text>
+        </Box>
+
+        {/* Acceptance Criteria - compact */}
+        <Box flexDirection="column" marginTop={1}>
+          <Text bold color="gray">Criteria ({parsedShard.acceptanceCriteria.length}):</Text>
+          {parsedShard.acceptanceCriteria.slice(0, 3).map((criterion, i) => (
+            <Text key={i} color="white" wrap="truncate-end">• {truncate(criterion, terminalWidth - 6)}</Text>
+          ))}
+          {parsedShard.acceptanceCriteria.length > 3 && (
+            <Text color="gray" dimColor>  +{parsedShard.acceptanceCriteria.length - 3} more</Text>
+          )}
+        </Box>
       </Box>
 
-      {/* Type and Dependencies */}
-      <Box marginBottom={1}>
-        <Text color="gray">Type: {shard.type}</Text>
-        {shard.dependencies.length > 0 && (
-          <Text color="gray"> • Depends: {shard.dependencies.join(", ")}</Text>
-        )}
+      {/* Actions Menu - fixed at bottom */}
+      <Box flexDirection="column" flexShrink={0}>
+        <Menu
+          title="Actions"
+          items={[
+            { label: "Open in Editor ($EDITOR)", value: "open-editor", hint: process.env.EDITOR || "vi" },
+            { label: "Add to Context", value: "edit-context" },
+            { label: "Add to Task", value: "edit-task" },
+            { label: "Add Acceptance Criterion", value: "edit-criteria" },
+            { label: "─────────────", value: "divider", disabled: true },
+            { label: "⚠️ Deprecate Shard", value: "deprecate-reason", hint: "Mark as deprecated with impact analysis" },
+            { label: "Back", value: "back" },
+          ]}
+          onSelect={(value) => {
+            if (value === "back") {
+              onBack();
+            } else if (value === "open-editor") {
+              openInEditor();
+            } else {
+              setMode(value as EditorMode);
+            }
+          }}
+        />
       </Box>
-
-      {error && <StatusMessage type="error" message={error} />}
-      {success && <StatusMessage type="success" message={success} />}
-
-      {/* Context Preview */}
-      <Box flexDirection="column" marginBottom={1}>
-        <Text bold underline>Context</Text>
-        <Text color="white">{truncate(parsedShard.context, 200)}</Text>
-      </Box>
-
-      {/* Task Preview */}
-      <Box flexDirection="column" marginBottom={1}>
-        <Text bold underline>Task</Text>
-        <Text color="white">{truncate(parsedShard.task, 200)}</Text>
-      </Box>
-
-      {/* Acceptance Criteria */}
-      <Box flexDirection="column" marginBottom={1}>
-        <Text bold underline>Acceptance Criteria ({parsedShard.acceptanceCriteria.length})</Text>
-        {parsedShard.acceptanceCriteria.slice(0, 5).map((criterion, i) => (
-          <Text key={i} color="white">• {truncate(criterion, 60)}</Text>
-        ))}
-        {parsedShard.acceptanceCriteria.length > 5 && (
-          <Text color="gray">... and {parsedShard.acceptanceCriteria.length - 5} more</Text>
-        )}
-      </Box>
-
-      {/* Actions Menu */}
-      <Menu
-        title="Actions"
-        items={[
-          { label: "Open in Editor ($EDITOR)", value: "open-editor", hint: process.env.EDITOR || "vi" },
-          { label: "Add to Context", value: "edit-context" },
-          { label: "Add to Task", value: "edit-task" },
-          { label: "Add Acceptance Criterion", value: "edit-criteria" },
-          { label: "─────────────", value: "divider", disabled: true },
-          { label: "⚠️ Deprecate Shard", value: "deprecate-reason", hint: "Mark as deprecated with impact analysis" },
-          { label: "Back", value: "back" },
-        ]}
-        onSelect={(value) => {
-          if (value === "back") {
-            onBack();
-          } else if (value === "open-editor") {
-            openInEditor();
-          } else {
-            setMode(value as EditorMode);
-          }
-        }}
-      />
     </Box>
   );
 }
