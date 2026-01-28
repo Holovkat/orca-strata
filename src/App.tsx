@@ -159,6 +159,7 @@ export function App({ config, projectPath, configFile }: AppProps) {
             sprintStatus={sprintStatus}
             onBack={() => setScreen("main")}
             onEditShard={handleEditShard}
+            onProjectPathChange={handleProjectPathChange}
           />
         );
       case "shard-editor":
