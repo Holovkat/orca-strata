@@ -22,7 +22,8 @@ interface ShardEditorProps {
   onShardDeprecated?: (shardId: string) => void;
 }
 
-type EditorMode = "view" | "view-full" | "edit-context" | "edit-task" | "edit-criteria" | "deprecate-reason" | "deprecate-review";
+type ViewSection = "context" | "task" | "criteria";
+type EditorMode = "view" | "edit" | "menu" | "deprecate-reason" | "deprecate-review";
 
 export function ShardEditor({
   config,
@@ -33,22 +34,28 @@ export function ShardEditor({
   onShardDeprecated,
 }: ShardEditorProps) {
   const [mode, setMode] = useState<EditorMode>("view");
+  const [activeSection, setActiveSection] = useState<ViewSection>("context");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [parsedShard, setParsedShard] = useState<ParsedShard | null>(null);
   
-  // Edit buffers (single line for simplicity)
-  const [editValue, setEditValue] = useState("");
-  
-  // Scroll position for full view
+  // Scroll position per section
   const [scrollOffset, setScrollOffset] = useState(0);
+  
+  // Edit buffer - stores the full content being edited
+  const [editBuffer, setEditBuffer] = useState("");
+  const [editCursorLine, setEditCursorLine] = useState(0);
   
   // Deprecation state
   const [deprecateReason, setDeprecateReason] = useState("");
   const [deprecateAnalysis, setDeprecateAnalysis] = useState("");
   const [droidOutput, setDroidOutput] = useState("");
+
+  const { stdout } = useStdout();
+  const terminalHeight = stdout?.rows || 24;
+  const terminalWidth = stdout?.columns || 80;
 
   // Load shard content
   useEffect(() => {
@@ -65,21 +72,33 @@ export function ShardEditor({
     loadShard();
   }, [projectPath, shard.file]);
 
-  useInput((input, key) => {
-    if (key.escape) {
-      if (mode === "view") {
-        onBack();
-      } else if (mode === "view-full") {
-        setMode("view");
-        setScrollOffset(0);
-      } else {
-        setMode("view");
-        setEditValue("");
-      }
+  // Get content for current section
+  const getSectionContent = (): string[] => {
+    if (!parsedShard) return [];
+    switch (activeSection) {
+      case "context":
+        return parsedShard.context.split("\n");
+      case "task":
+        return parsedShard.task.split("\n");
+      case "criteria":
+        return parsedShard.acceptanceCriteria.map((c, i) => `${i + 1}. ${c}`);
+      default:
+        return [];
     }
-    // Scroll handling for full view mode
-    if (mode === "view-full") {
-      if (key.upArrow || input === "k") {
+  };
+
+  // Handle input based on mode
+  useInput((input, key) => {
+    if (mode === "view") {
+      if (key.escape) {
+        setMode("menu");
+      } else if (key.tab) {
+        // Cycle through sections
+        const sections: ViewSection[] = ["context", "task", "criteria"];
+        const idx = sections.indexOf(activeSection);
+        setActiveSection(sections[(idx + 1) % sections.length]!);
+        setScrollOffset(0);
+      } else if (key.upArrow || input === "k") {
         setScrollOffset(prev => Math.max(0, prev - 1));
       } else if (key.downArrow || input === "j") {
         setScrollOffset(prev => prev + 1);
@@ -87,12 +106,37 @@ export function ShardEditor({
         setScrollOffset(prev => Math.max(0, prev - 10));
       } else if (key.pageDown) {
         setScrollOffset(prev => prev + 10);
+      } else if (input === "e" || key.return) {
+        // Enter edit mode for current section
+        const content = getSectionContent();
+        if (activeSection === "criteria") {
+          // For criteria, join with newlines for editing
+          setEditBuffer(parsedShard?.acceptanceCriteria.join("\n") || "");
+        } else {
+          setEditBuffer(content.join("\n"));
+        }
+        setEditCursorLine(0);
+        setMode("edit");
+      }
+    } else if (mode === "edit") {
+      if (key.escape) {
+        setMode("view");
+        setEditBuffer("");
+      }
+      // Note: TextInput handles the actual text editing
+    } else if (mode === "menu") {
+      if (key.escape) {
+        setMode("view");
       }
     }
   });
 
-  const handleSave = async (field: "context" | "task" | "criteria") => {
-    if (!parsedShard || !editValue.trim()) return;
+  // Save edited content
+  const handleSaveEdit = async () => {
+    if (!parsedShard || !editBuffer.trim()) {
+      setMode("view");
+      return;
+    }
 
     setSaving(true);
     setError(null);
@@ -101,43 +145,37 @@ export function ShardEditor({
     try {
       const shardPath = join(projectPath, shard.file);
       let updatedShard = { ...parsedShard };
-      let contentChanged = false;
 
-      if (field === "context") {
-        // Append to existing context
-        updatedShard.context = parsedShard.context + "\n\n" + editValue;
-        contentChanged = true;
-      } else if (field === "task") {
-        // Append to existing task
-        updatedShard.task = parsedShard.task + "\n\n" + editValue;
-        contentChanged = true;
-      } else if (field === "criteria") {
-        // Add new criterion
-        updatedShard.acceptanceCriteria = [...parsedShard.acceptanceCriteria, editValue];
-        contentChanged = true;
+      if (activeSection === "context") {
+        updatedShard.context = editBuffer;
+      } else if (activeSection === "task") {
+        updatedShard.task = editBuffer;
+      } else if (activeSection === "criteria") {
+        // Split by newlines, filter empty
+        updatedShard.acceptanceCriteria = editBuffer
+          .split("\n")
+          .map(line => line.replace(/^\d+\.\s*/, "").trim()) // Remove numbering
+          .filter(line => line.length > 0);
       }
 
-      if (contentChanged) {
-        let newStatus: ColumnName = shard.status;
-        if (shard.status !== "Ready to Build") {
-          newStatus = "Ready to Build";
-          setSuccess(`Added content. Status reset to "Ready to Build".`);
-        } else {
-          setSuccess("Added content.");
-        }
-
-        await updateShard(shardPath, updatedShard);
-
-        if (shard.issueNumber && newStatus !== shard.status) {
-          await updateIssueLabels(shard.issueNumber, newStatus);
-        }
-
-        setParsedShard(updatedShard);
-        onShardUpdated({ ...shard, status: newStatus });
+      let newStatus: ColumnName = shard.status;
+      if (shard.status !== "Ready to Build") {
+        newStatus = "Ready to Build";
+        setSuccess(`Saved. Status reset to "Ready to Build".`);
+      } else {
+        setSuccess("Saved.");
       }
 
+      await updateShard(shardPath, updatedShard);
+
+      if (shard.issueNumber && newStatus !== shard.status) {
+        await updateIssueLabels(shard.issueNumber, newStatus);
+      }
+
+      setParsedShard(updatedShard);
+      onShardUpdated({ ...shard, status: newStatus });
       setMode("view");
-      setEditValue("");
+      setEditBuffer("");
     } catch (err) {
       setError(`Failed to save: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
@@ -152,51 +190,22 @@ export function ShardEditor({
     setDroidOutput("");
     
     try {
-      // Load all sprints to find dependencies
       const sprints = await scanForSprints(projectPath, config.paths.features);
       const allShards: Shard[] = sprints.flatMap(s => s.shards);
-      
-      // Find shards that depend on this one
       const dependentShards = allShards.filter(s => 
         s.dependencies.includes(shard.id) && s.id !== shard.id
       );
       
-      const prompt = `You are analyzing the impact of deprecating a shard in a sprint.
+      const prompt = `Analyze the impact of deprecating shard "${shard.title}" (${shard.id}).
 
-## Shard Being Deprecated
-ID: ${shard.id}
-Title: ${shard.title}
+Reason: ${reason}
 Creates: ${shard.creates.join(", ") || "None"}
-Type: ${shard.type}
+Dependent shards: ${dependentShards.map(s => s.id).join(", ") || "None"}
 
-## Reason for Deprecation
-${reason}
-
-## Shards That Depend on This One
-${dependentShards.length > 0 
-  ? dependentShards.map(s => `- ${s.id}: ${s.title} (depends on: ${s.dependencies.join(", ")})`).join("\n")
-  : "None"}
-
-## All Shards in Sprint
-${allShards.map(s => `- ${s.id}: ${s.title} [${s.type}] creates: ${s.creates.join(", ") || "none"}`).join("\n")}
-
-## Your Task
-Analyze the impact of deprecating this shard and provide:
-
-1. **Impact Summary**: What will be affected by removing this shard?
-2. **Dependency Adjustments**: Which shards need their dependencies updated?
-3. **Orphaned Work**: Are there any files/features that will no longer be created?
-4. **Recommendations**: Should the work be reassigned to another shard, or is it safe to remove?
-
-Provide a concise analysis (not a JSON response).`;
+Provide a brief impact summary, affected dependencies, and recommendation.`;
 
       const result = await invokeDroid(
-        {
-          droid: "technical-analyst",
-          prompt,
-          autoLevel: "low",
-          cwd: projectPath,
-        },
+        { droid: "technical-analyst", prompt, autoLevel: "low", cwd: projectPath },
         config,
         (chunk) => setDroidOutput((prev) => prev + chunk)
       );
@@ -217,21 +226,14 @@ Provide a concise analysis (not a JSON response).`;
   // Execute deprecation
   const executeDeprecation = async () => {
     setLoading(true);
-    setError(null);
-    
     try {
       const shardPath = join(projectPath, shard.file);
       await deprecateShard(shardPath, deprecateReason, deprecateAnalysis);
-      
-      // Close issue if exists
       if (shard.issueNumber) {
         await updateIssueLabels(shard.issueNumber, "Done");
       }
-      
       setSuccess(`Shard ${shard.id} has been deprecated`);
       onShardDeprecated?.(shard.id);
-      
-      // Go back after a brief delay
       setTimeout(() => onBack(), 1500);
     } catch (err) {
       setError(`Failed to deprecate: ${err instanceof Error ? err.message : String(err)}`);
@@ -253,71 +255,104 @@ Provide a concise analysis (not a JSON response).`;
     );
   }
 
+  // Calculate layout dimensions
+  const headerHeight = 4;
+  const footerHeight = 2;
+  const contentHeight = Math.max(8, terminalHeight - headerHeight - footerHeight);
+
   // Deprecation reason mode
   if (mode === "deprecate-reason") {
     return (
-      <Box flexDirection="column">
-        <Text bold color="red">Deprecate Shard: {shard.title}</Text>
-        <Text color="gray" dimColor>This will mark the shard as deprecated and analyze impact on other shards.</Text>
-        <Box marginTop={1}>
+      <Box flexDirection="column" height={terminalHeight - 1}>
+        <Text bold color="red">⚠️ Deprecate Shard: {shard.title}</Text>
+        <Text color="gray" dimColor>This will mark the shard as deprecated.</Text>
+        <Box marginTop={1} flexGrow={1}>
           <QuestionPrompt
-            question="Why are you deprecating this shard? (e.g., 'feature no longer needed', 'merged with shard-05', 'scope changed')"
+            question="Why are you deprecating this shard?"
             type="text"
             onAnswer={(answer) => {
               if (answer.trim()) {
                 setDeprecateReason(answer);
                 analyzeDeprecation(answer);
               } else {
-                setMode("view");
+                setMode("menu");
               }
             }}
-            onCancel={() => setMode("view")}
+            onCancel={() => setMode("menu")}
           />
         </Box>
-        {droidOutput && (
-          <Box marginTop={1} flexDirection="column">
-            <Text color="yellow">Analyzing...</Text>
-            <Text color="gray">{droidOutput.slice(-200)}</Text>
-          </Box>
-        )}
       </Box>
     );
   }
 
   // Deprecation review mode
   if (mode === "deprecate-review") {
+    const analysisLines = deprecateAnalysis.split("\n");
+    const visibleLines = analysisLines.slice(0, contentHeight - 4);
+    
     return (
-      <Box flexDirection="column">
+      <Box flexDirection="column" height={terminalHeight - 1}>
         <Text bold color="red">Deprecation Impact Analysis</Text>
         <Text color="gray" dimColor>Reason: {deprecateReason}</Text>
         
-        <Box marginTop={1} flexDirection="column" borderStyle="single" borderColor="yellow" paddingX={1}>
-          <Text>{deprecateAnalysis.slice(0, 800)}</Text>
-          {deprecateAnalysis.length > 800 && <Text color="gray">... (truncated)</Text>}
+        <Box marginY={1} flexDirection="column" flexGrow={1} overflow="hidden">
+          {visibleLines.map((line, i) => (
+            <Text key={i} wrap="truncate-end">{line}</Text>
+          ))}
+          {analysisLines.length > visibleLines.length && (
+            <Text color="gray">... +{analysisLines.length - visibleLines.length} lines</Text>
+          )}
+        </Box>
+        
+        {error && <StatusMessage type="error" message={error} />}
+        
+        <Box flexShrink={0}>
+          <Menu
+            items={[
+              { label: "✓ Confirm Deprecation", value: "confirm" },
+              { label: "✗ Cancel", value: "cancel" },
+            ]}
+            onSelect={(value) => {
+              if (value === "confirm") executeDeprecation();
+              else { setMode("menu"); setDeprecateReason(""); setDeprecateAnalysis(""); }
+            }}
+          />
+        </Box>
+      </Box>
+    );
+  }
+
+  // Menu mode
+  if (mode === "menu") {
+    return (
+      <Box flexDirection="column" height={terminalHeight - 1}>
+        <Box flexShrink={0} marginBottom={1}>
+          <Text bold color="cyan">{parsedShard.metadata.title}</Text>
+          <Text color="gray"> ({shard.id})</Text>
+        </Box>
+        
+        <Box flexShrink={0}>
+          <Text>Status: </Text>
+          <Text color={getStatusColor(shard.status)}>{shard.status}</Text>
+          <Text color="gray"> • Type: {shard.type}</Text>
         </Box>
         
         {error && <StatusMessage type="error" message={error} />}
         {success && <StatusMessage type="success" message={success} />}
         
-        <Box marginTop={1}>
+        <Box marginY={1} flexGrow={1}>
           <Menu
+            title="Actions"
             items={[
-              { label: "✓ Confirm Deprecation", value: "confirm", hint: "Mark shard as deprecated" },
-              { label: "✗ Cancel", value: "cancel", hint: "Keep shard active" },
+              { label: "View/Edit Content", value: "view", hint: "Tab to switch sections, Enter to edit" },
+              { label: "─────────────", value: "divider", disabled: true },
+              { label: "⚠️ Deprecate Shard", value: "deprecate", hint: "Mark as deprecated" },
+              { label: "Back", value: "back" },
             ]}
             onSelect={(value) => {
-              if (value === "confirm") {
-                executeDeprecation();
-              } else {
-                setMode("view");
-                setDeprecateReason("");
-                setDeprecateAnalysis("");
-              }
-            }}
-            onCancel={() => {
-              setMode("view");
-              setDeprecateReason("");
-              setDeprecateAnalysis("");
+              if (value === "back") onBack();
+              else if (value === "view") setMode("view");
+              else if (value === "deprecate") setMode("deprecate-reason");
             }}
           />
         </Box>
@@ -325,164 +360,103 @@ Provide a concise analysis (not a JSON response).`;
     );
   }
 
-  // Edit modes - simple single line append
-  if (mode.startsWith("edit-")) {
-    const fieldName = mode === "edit-context" ? "context" : mode === "edit-task" ? "task" : "criterion";
-    const field = mode === "edit-context" ? "context" : mode === "edit-task" ? "task" : "criteria";
-    
-    return (
-      <Box flexDirection="column">
-        <Text bold color="cyan">Add to {fieldName}</Text>
-        <Text color="gray" dimColor>Enter to save, Esc to cancel</Text>
-        <Box marginTop={1}>
-          <Text color="cyan">❯ </Text>
-          <TextInput
-            value={editValue}
-            onChange={setEditValue}
-            onSubmit={() => handleSave(field)}
-            placeholder={`Add new ${fieldName}...`}
-          />
-        </Box>
-        {saving && <Spinner message="Saving..." />}
-      </Box>
-    );
-  }
-
-  // Full content view mode - scrollable
-  const { stdout } = useStdout();
-  const terminalHeight = stdout?.rows || 24;
-  const terminalWidth = stdout?.columns || 80;
-  
-  if (mode === "view-full") {
-    // Build full content as lines
-    const contentLines: Array<{ type: "header" | "label" | "text"; text: string }> = [
-      { type: "header", text: `# ${parsedShard.metadata.title}` },
-      { type: "text", text: "" },
-      { type: "label", text: "## Context" },
-      ...parsedShard.context.split("\n").map(line => ({ type: "text" as const, text: line })),
-      { type: "text", text: "" },
-      { type: "label", text: "## Task" },
-      ...parsedShard.task.split("\n").map(line => ({ type: "text" as const, text: line })),
-      { type: "text", text: "" },
-      { type: "label", text: `## Acceptance Criteria (${parsedShard.acceptanceCriteria.length})` },
-      ...parsedShard.acceptanceCriteria.map(c => ({ type: "text" as const, text: `- [ ] ${c}` })),
-      { type: "text", text: "" },
-      { type: "label", text: "## Dependencies" },
-      { type: "text", text: `Creates: ${parsedShard.metadata.creates?.join(", ") || "N/A"}` },
-      { type: "text", text: `Depends on: ${parsedShard.metadata.dependencies?.join(", ") || "None"}` },
-      { type: "text", text: `Modifies: ${parsedShard.metadata.modifies?.join(", ") || "None"}` },
-    ];
-    
-    const visibleHeight = terminalHeight - 6;
-    const maxScroll = Math.max(0, contentLines.length - visibleHeight);
-    const safeOffset = Math.min(scrollOffset, maxScroll);
-    const visibleLines = contentLines.slice(safeOffset, safeOffset + visibleHeight);
+  // Edit mode - full panel text editing
+  if (mode === "edit") {
+    const sectionLabel = activeSection === "context" ? "Context" : activeSection === "task" ? "Task" : "Acceptance Criteria";
     
     return (
       <Box flexDirection="column" height={terminalHeight - 1}>
         <Box flexShrink={0} marginBottom={1}>
-          <Text bold color="cyan">{parsedShard.metadata.title}</Text>
-          <Text color="gray"> - Full View</Text>
+          <Text bold color="green">Editing: {sectionLabel}</Text>
+          <Text color="gray"> (Enter to save, Esc to cancel)</Text>
         </Box>
         
-        <Box flexDirection="column" flexGrow={1} overflow="hidden">
-          {visibleLines.map((line, i) => (
-            <Text 
-              key={safeOffset + i} 
-              color={line.type === "header" ? "green" : line.type === "label" ? "cyan" : "white"}
-              bold={line.type === "header" || line.type === "label"}
-              wrap="truncate-end"
-            >
-              {line.text}
-            </Text>
-          ))}
+        <Box flexDirection="column" flexGrow={1} borderStyle="single" borderColor="green" padding={1}>
+          <TextInput
+            value={editBuffer}
+            onChange={setEditBuffer}
+            onSubmit={handleSaveEdit}
+            placeholder={`Enter ${sectionLabel.toLowerCase()}...`}
+          />
         </Box>
+        
+        {saving && <Spinner message="Saving..." />}
         
         <Box flexShrink={0} marginTop={1}>
           <Text color="gray">
-            ↑/↓ or j/k scroll • PgUp/PgDn • Esc back • Line {safeOffset + 1}/{contentLines.length}
+            Tip: For multi-line content, use \n for line breaks
           </Text>
         </Box>
       </Box>
     );
   }
 
-  // View mode - constrained to terminal viewport
-  // Calculate how much space we have for content preview
-  // Reserve: header (3) + status (2) + menu (9) + padding (2) = ~16 lines
-  const contentHeight = Math.max(6, terminalHeight - 16);
-  const previewMaxChars = Math.min(300, (terminalWidth - 4) * Math.floor(contentHeight / 3));
-  
+  // View mode - default scrollable content view
+  const content = getSectionContent();
+  const maxScroll = Math.max(0, content.length - contentHeight + 2);
+  const safeOffset = Math.min(scrollOffset, maxScroll);
+  const visibleLines = content.slice(safeOffset, safeOffset + contentHeight - 2);
+
+  const sectionTabs = [
+    { name: "Context", key: "context" as ViewSection, count: parsedShard.context.split("\n").length },
+    { name: "Task", key: "task" as ViewSection, count: parsedShard.task.split("\n").length },
+    { name: "Criteria", key: "criteria" as ViewSection, count: parsedShard.acceptanceCriteria.length },
+  ];
+
   return (
     <Box flexDirection="column" height={terminalHeight - 1}>
-      {/* Header - fixed */}
-      <Box flexDirection="column" flexShrink={0}>
+      {/* Header with tabs */}
+      <Box flexShrink={0} flexDirection="column">
         <Box marginBottom={1}>
-          <Text bold color="cyan">{truncate(parsedShard.metadata.title, terminalWidth - 20)}</Text>
-          <Text color="gray"> ({shard.id})</Text>
-        </Box>
-
-        {/* Status */}
-        <Box>
-          <Text>Status: </Text>
+          <Text bold color="cyan">{parsedShard.metadata.title}</Text>
+          <Text color="gray"> • {shard.type} • </Text>
           <Text color={getStatusColor(shard.status)}>{shard.status}</Text>
-          {shard.issueNumber && (
-            <Text color="gray"> • Issue #{shard.issueNumber}</Text>
-          )}
-          <Text color="gray"> • Type: {shard.type}</Text>
         </Box>
         
-        {error && <StatusMessage type="error" message={error} />}
-        {success && <StatusMessage type="success" message={success} />}
-      </Box>
-
-      {/* Content Preview - flexible, constrained */}
-      <Box flexDirection="column" flexGrow={1} overflow="hidden" marginY={1}>
-        {/* Context - compact */}
-        <Box flexDirection="column">
-          <Text bold color="gray">Context:</Text>
-          <Text color="white" wrap="truncate-end">{truncate(parsedShard.context, previewMaxChars)}</Text>
-        </Box>
-
-        {/* Task - compact */}
-        <Box flexDirection="column" marginTop={1}>
-          <Text bold color="gray">Task:</Text>
-          <Text color="white" wrap="truncate-end">{truncate(parsedShard.task, previewMaxChars)}</Text>
-        </Box>
-
-        {/* Acceptance Criteria - compact */}
-        <Box flexDirection="column" marginTop={1}>
-          <Text bold color="gray">Criteria ({parsedShard.acceptanceCriteria.length}):</Text>
-          {parsedShard.acceptanceCriteria.slice(0, 3).map((criterion, i) => (
-            <Text key={i} color="white" wrap="truncate-end">• {truncate(criterion, terminalWidth - 6)}</Text>
+        {/* Section tabs */}
+        <Box gap={2}>
+          {sectionTabs.map((tab) => (
+            <Box key={tab.key}>
+              <Text 
+                color={activeSection === tab.key ? "green" : "gray"}
+                bold={activeSection === tab.key}
+              >
+                {activeSection === tab.key ? "▸ " : "  "}
+                {tab.name} ({tab.count})
+              </Text>
+            </Box>
           ))}
-          {parsedShard.acceptanceCriteria.length > 3 && (
-            <Text color="gray" dimColor>  +{parsedShard.acceptanceCriteria.length - 3} more</Text>
-          )}
         </Box>
       </Box>
+      
+      {error && <StatusMessage type="error" message={error} />}
+      {success && <StatusMessage type="success" message={success} />}
 
-      {/* Actions Menu - fixed at bottom */}
-      <Box flexDirection="column" flexShrink={0}>
-        <Menu
-          title="Actions"
-          items={[
-            { label: "View Full Content", value: "view-full", hint: "Scrollable view" },
-            { label: "Add to Context", value: "edit-context" },
-            { label: "Add to Task", value: "edit-task" },
-            { label: "Add Acceptance Criterion", value: "edit-criteria" },
-            { label: "─────────────", value: "divider", disabled: true },
-            { label: "⚠️ Deprecate Shard", value: "deprecate-reason", hint: "Mark as deprecated with impact analysis" },
-            { label: "Back", value: "back" },
-          ]}
-          onSelect={(value) => {
-            if (value === "back") {
-              onBack();
-            } else {
-              setMode(value as EditorMode);
-            }
-          }}
-        />
+      {/* Content area */}
+      <Box 
+        flexDirection="column" 
+        flexGrow={1} 
+        marginY={1} 
+        borderStyle="single" 
+        borderColor={activeSection === "context" ? "blue" : activeSection === "task" ? "yellow" : "magenta"}
+        paddingX={1}
+        overflow="hidden"
+      >
+        {visibleLines.map((line, i) => (
+          <Text key={safeOffset + i} wrap="truncate-end" color="white">
+            {line || " "}
+          </Text>
+        ))}
+        {visibleLines.length === 0 && (
+          <Text color="gray" dimColor>(empty - press Enter to add content)</Text>
+        )}
+      </Box>
+
+      {/* Footer */}
+      <Box flexShrink={0}>
+        <Text color="gray">
+          Tab: switch section • ↑↓/jk: scroll • Enter/e: edit • Esc: menu • {safeOffset + 1}-{Math.min(safeOffset + contentHeight - 2, content.length)}/{content.length}
+        </Text>
       </Box>
     </Box>
   );
@@ -500,9 +474,4 @@ function getStatusColor(status: ColumnName): string {
     case "Done": return "green";
     default: return "white";
   }
-}
-
-function truncate(text: string, maxLength: number): string {
-  if (text.length <= maxLength) return text;
-  return text.slice(0, maxLength - 3) + "...";
 }
