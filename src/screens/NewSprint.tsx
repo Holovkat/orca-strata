@@ -277,7 +277,7 @@ Return a JSON array of shard objects:
     "id": "shard-01-feature-name",
     "title": "Implement Feature X",
     "context": "From PRD: [relevant section]",
-    "task": "Specific implementation task",
+    "task": "Specific implementation task with UI details inline if applicable",
     "type": "backend|frontend|fullstack",
     "requiredReading": [
       {"label": "Architecture", "path": "../../docs/design/architecture.md"},
@@ -288,18 +288,15 @@ Return a JSON array of shard objects:
     "creates": ["src/components/X.tsx"],
     "dependsOn": ["shard-00-architecture"],
     "modifies": [],
-    "uiSpec": "For frontend/fullstack only: Component hierarchy, layout (flex/grid), spacing tokens, colors for states, responsive breakpoints, accessibility notes. Leave empty for backend shards."
+    "needsUiReview": true
   }
 ]
 \`\`\`
 
-For frontend/fullstack shards, the uiSpec field MUST include:
-- Component tree structure
-- Layout type (flex column, grid 2-col, etc.)
-- Spacing values (use token names like spacing-4)
-- Colors for all states (default, hover, focus, disabled)
-- Responsive behavior (mobile-first, breakpoints)
-- Accessibility (ARIA roles, keyboard nav)
+IMPORTANT for frontend/fullstack shards:
+- Set "needsUiReview": true
+- Include UI requirements in the "task" field (layout, spacing tokens, colors, states)
+- Add design-related acceptance criteria
 
 Return ONLY the JSON array, no other text.`;
 
@@ -318,19 +315,36 @@ Return ONLY the JSON array, no other text.`;
         throw new Error("Failed to analyze PRD");
       }
 
-      // Parse the JSON response
-      const jsonMatch = result.output.match(/\[[\s\S]*\]/);
+      // Parse the JSON response - handle both raw JSON and code-fenced JSON
+      let jsonStr = result.output;
+      
+      // Try to extract from code fence first
+      const codeFenceMatch = result.output.match(/```(?:json)?\s*([\s\S]*?)```/);
+      if (codeFenceMatch && codeFenceMatch[1]) {
+        jsonStr = codeFenceMatch[1].trim();
+      }
+      
+      // Find the JSON array
+      const jsonMatch = jsonStr.match(/\[[\s\S]*\]/);
       if (!jsonMatch) {
-        throw new Error("Failed to parse shard definitions from AI response");
+        console.error("AI response:", result.output.slice(0, 500));
+        throw new Error("Failed to parse shard definitions from AI response - no JSON array found");
       }
 
-      const rawShards = JSON.parse(jsonMatch[0]) as Array<ShardDraft & { uiSpec?: string }>;
+      let rawShards: Array<ShardDraft & { uiSpec?: string }>;
+      try {
+        rawShards = JSON.parse(jsonMatch[0]);
+      } catch (parseErr) {
+        console.error("JSON parse error:", parseErr);
+        console.error("Attempted to parse:", jsonMatch[0].slice(0, 500));
+        throw new Error(`Failed to parse JSON: ${parseErr instanceof Error ? parseErr.message : "Invalid JSON"}`);
+      }
       
-      // Map uiSpec to uiDesignSpec
+      // Map uiSpec to uiDesignSpec and handle needsUiReview
       const shards: ShardDraft[] = rawShards.map(s => ({
         ...s,
         uiDesignSpec: s.uiSpec || s.uiDesignSpec,
-        needsUiReview: (s.type === "frontend" || s.type === "fullstack") && !s.uiSpec,
+        needsUiReview: s.needsUiReview ?? (s.type === "frontend" || s.type === "fullstack"),
       }));
       
       // Validate architecture shard exists
