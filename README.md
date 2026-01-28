@@ -2,6 +2,36 @@
 
 A menu-driven TUI orchestrator that coordinates AI-powered development workflows by invoking droids as background services.
 
+## Why Orca?
+
+Building complex applications with AI agents is powerful—but chaotic. Without coordination:
+- **Agents step on each other's work**, causing merge conflicts and lost progress
+- **Context gets lost** between sessions, forcing repeated explanations
+- **No visibility** into what agents are doing or how far along they are
+
+Orca solves this by treating AI development as a **managed workflow**.
+
+### The Core Insight
+
+> AI works best with well-defined, isolated tasks.
+
+Orca breaks features into **shards**—small, focused units of work with clear boundaries. Each shard runs in its own git worktree, with its own branch, assigned to a specialized droid. This isolation provides **guardrails** that keep agents focused on their task without drifting into unrelated code.
+
+### Why Droids as Services?
+
+Rather than one-shot CLI commands, Orca invokes droids as background services:
+- **Persistent context** across tasks within a sprint
+- **Parallel execution** across multiple shards simultaneously  
+- **Better monitoring** with real-time progress visibility
+
+### Model-Agnostic Orchestration
+
+Orca is a **model-agnostic orchestration layer**. Different shards can use different models based on task complexity. Swap models without changing your workflow.
+
+### Who Is This For?
+
+Anyone building complex applications and features that require **managed agentic development processes**. Whether you're a solo developer multiplying your output or a team coordinating AI-assisted workflows, Orca provides the structure to ship faster without the chaos.
+
 ## Installation
 
 ```bash
