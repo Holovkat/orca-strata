@@ -187,7 +187,7 @@ export async function scaffoldProject(
   try {
     // Create directory structure
     await mkdir(projectPath, { recursive: true });
-    await mkdir(join(projectPath, "features", "sprints"), { recursive: true });
+    await mkdir(join(projectPath, "features"), { recursive: true });
     await mkdir(join(projectPath, "docs", "design"), { recursive: true });
     await mkdir(join(projectPath, "src"), { recursive: true });
 
@@ -234,7 +234,7 @@ branching:
     );
 
     // Create .gitkeep files for empty directories
-    await writeFile(join(projectPath, "features", "sprints", ".gitkeep"), "");
+    await writeFile(join(projectPath, "features", ".gitkeep"), "");
     await writeFile(join(projectPath, "src", ".gitkeep"), "");
 
     // Copy global UI/UX guidelines to docs/design
