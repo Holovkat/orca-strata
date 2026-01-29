@@ -17,7 +17,7 @@ interface ViewStatusProps {
   onUpdateShardModel?: (shardId: string | string[], model: string | undefined) => void;
 }
 
-type SubScreen = "select-project" | "menu" | "board" | "issues" | "droids" | "shards";
+type SubScreen = "menu" | "board" | "issues" | "droids" | "shards";
 
 export function ViewStatus({
   config,
@@ -28,9 +28,8 @@ export function ViewStatus({
   onProjectPathChange,
   onUpdateShardModel,
 }: ViewStatusProps) {
-  const [subScreen, setSubScreen] = useState<SubScreen>(initialSprintStatus ? "menu" : "select-project");
+  const [subScreen, setSubScreen] = useState<SubScreen>("menu");
   const [sprintStatus, setSprintStatus] = useState<SprintStatus | null>(initialSprintStatus);
-  const [existingProjects, setExistingProjects] = useState<string[]>([]);
   const [selectedProjectPath, setSelectedProjectPath] = useState<string>(projectPath);
   const [loading, setLoading] = useState(false);
 
@@ -39,58 +38,15 @@ export function ViewStatus({
     setSprintStatus(initialSprintStatus);
   }, [initialSprintStatus]);
 
-  // Load existing projects from workspace
-  useEffect(() => {
-    const loadProjects = async () => {
-      const projectsDir = config.workspace_root 
-        ? join(config.workspace_root, "projects")
-        : join(projectPath, "projects");
-      
-      try {
-        const { readdir, stat } = await import("fs/promises");
-        const entries = await readdir(projectsDir);
-        const dirs: string[] = [];
-        
-        for (const entry of entries) {
-          const fullPath = join(projectsDir, entry);
-          const stats = await stat(fullPath).catch(() => null);
-          if (stats?.isDirectory() && !entry.startsWith(".")) {
-            dirs.push(entry);
-          }
-        }
-        
-        setExistingProjects(dirs);
-      } catch {
-        setExistingProjects([]);
-      }
-    };
-    
-    loadProjects();
-  }, [config.workspace_root, projectPath]);
-
   useInput((input, key) => {
     if (key.escape) {
-      if (subScreen === "menu" || subScreen === "select-project") {
+      if (subScreen === "menu") {
         onBack();
       } else {
         setSubScreen("menu");
       }
     }
   });
-
-  const loadProjectStatus = async (path: string) => {
-    setLoading(true);
-    setSelectedProjectPath(path);
-    onProjectPathChange?.(path); // Update App's project path
-    const status = await deriveSprintStatus(path, config);
-    setSprintStatus(status);
-    setLoading(false);
-    setSubScreen(status ? "menu" : "menu"); // Go to menu even if no status
-  };
-
-  const projectsDir = config.workspace_root 
-    ? join(config.workspace_root, "projects")
-    : join(projectPath, "projects");
 
   const menuItems: MenuItem[] = [
     {
@@ -129,49 +85,6 @@ export function ViewStatus({
     }
 
     switch (subScreen) {
-      case "select-project":
-        const projectMenuItems: MenuItem[] = [
-          ...existingProjects.map(p => ({
-            label: p,
-            value: `project:${p}`,
-            hint: "existing project",
-          })),
-          {
-            label: "Use Current Directory",
-            value: "current",
-            hint: projectPath,
-          },
-          {
-            label: "Back",
-            value: "back",
-          },
-        ];
-
-        return (
-          <Box flexDirection="column">
-            <Text bold color="cyan">Select Project to View</Text>
-            <Text color="gray" dimColor>Projects folder: {projectsDir}</Text>
-            {existingProjects.length === 0 && (
-              <Text color="yellow" dimColor>No existing projects found</Text>
-            )}
-            <Box marginTop={1}>
-              <Menu 
-                items={projectMenuItems} 
-                onSelect={(value) => {
-                  if (value === "back") {
-                    onBack();
-                  } else if (value === "current") {
-                    loadProjectStatus(projectPath);
-                  } else if (value.startsWith("project:")) {
-                    const projectName = value.replace("project:", "");
-                    loadProjectStatus(join(projectsDir, projectName));
-                  }
-                }}
-                onCancel={onBack}
-              />
-            </Box>
-          </Box>
-        );
       case "board":
         return <BoardView sprintStatus={sprintStatus} />;
       case "issues":

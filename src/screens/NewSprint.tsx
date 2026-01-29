@@ -1362,10 +1362,48 @@ ${shard.acceptanceCriteria.map((c) => `- [ ] ${c}`).join("\n")}
         );
 
       case "create-project":
+        // When startAtCreateProject is true, projectPath is the full target path
+        // Otherwise, we're coming from select-project and need to ask for a name
+        if (startAtCreateProject) {
+          // Scaffold project at the provided projectPath
+          const projectName = projectPath.split("/").pop() || "project";
+          
+          // Auto-trigger scaffolding on first render
+          if (!loading && !newProjectName) {
+            (async () => {
+              setLoading(true);
+              setLoadingMessage(`Creating project: ${projectName}`);
+              
+              const result = await scaffoldProject(projectPath, projectName);
+              
+              if (!result.success) {
+                setError(result.error || "Failed to create project");
+                setLoading(false);
+                return;
+              }
+              
+              setSelectedProjectPath(projectPath);
+              onProjectPathChange?.(projectPath);
+              setNewProjectName(projectName);
+              setLoading(false);
+              // New projects always need PRD Q&A
+              setStep("prd-qa");
+            })();
+          }
+          
+          return (
+            <Box flexDirection="column">
+              <Text bold color="cyan">Create New Project</Text>
+              <Text color="gray">Creating project at: {projectPath}</Text>
+            </Box>
+          );
+        }
+        
+        // Legacy: ask for project name (from select-project menu)
         return (
           <Box flexDirection="column">
             <Text bold color="cyan">Create New Project</Text>
-            <Text color="gray" dimColor>This will create a new folder in: {projectsDir}</Text>
+            <Text color="gray" dimColor>Enter a name for the new project folder</Text>
             <Box marginTop={1}>
               <QuestionPrompt
                 question="Enter new project name (folder name):"
@@ -1376,7 +1414,12 @@ ${shard.acceptanceCriteria.map((c) => `- [ ] ${c}`).join("\n")}
                     return;
                   }
                   const safeName = answer.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
-                  const newPath = join(projectsDir, safeName);
+                  if (!safeName) {
+                    setError("Project name must contain at least one letter or number");
+                    return;
+                  }
+                  // Create in current directory as a subfolder
+                  const newPath = join(projectPath, safeName);
                   
                   setLoading(true);
                   setLoadingMessage(`Creating project: ${safeName}`);

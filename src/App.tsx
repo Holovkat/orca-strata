@@ -99,8 +99,17 @@ export function App({ config, projectPath, configFile }: AppProps) {
   // Handle project selection
   const handleProjectSelected = useCallback(async (path: string, name: string) => {
     if (path === "__new__") {
-      // Go to new sprint to create a new project
+      // Go to new sprint to create a new project (legacy)
       setScreen("new-sprint");
+      return;
+    }
+    
+    if (path.startsWith("__create__:")) {
+      // Create new project at specified path
+      const newPath = path.replace("__create__:", "");
+      setCurrentProjectPath(newPath);
+      setCurrentProjectName(name);
+      setScreen("create-project");
       return;
     }
     
